@@ -64,6 +64,7 @@ class KickAssAnime :
 
     private val json: Json by injectLazy()
 
+    // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int) = GET("$apiUrl/popular?page=$page")
 
     override fun popularAnimeParse(response: Response): AnimesPage {
@@ -84,6 +85,7 @@ class KickAssAnime :
         thumbnail_url = "$baseUrl/${anime.poster.url}"
     }
 
+    // ============================== Episodes ==============================
     private fun episodeListRequest(anime: SAnime, page: Int, lang: String) = GET("$apiUrl${anime.url}/episodes?page=$page&lang=$lang")
 
     private fun getEpisodeResponse(anime: SAnime, page: Int, lang: String): EpisodeResponseDto = client.newCall(episodeListRequest(anime, page, lang))
@@ -91,6 +93,7 @@ class KickAssAnime :
         .parseAs()
 
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> = coroutineScope {
+        // Fetch what languages are available for this anime
         val languages = client.newCall(
             GET("$apiUrl${anime.url}/language"),
         ).awaitSuccess().parseAs<LanguagesDto>().result
@@ -98,6 +101,7 @@ class KickAssAnime :
         val prefLang = preferences.getString(PREF_AUDIO_LANG_KEY, PREF_AUDIO_LANG_DEFAULT)!!
         val pref2ndLang = preferences.getString(PREF_AUDIO_LANG_KEY_2ND, PREF_AUDIO_LANG_DEFAULT_2ND)!!
 
+        // Try preferred language first, then others
         val langOrder = languages
             .sortedWith(
                 compareBy(
@@ -135,7 +139,7 @@ class KickAssAnime :
                 break
             }
         }
-
+        // If nothing was found, return empty list
         foundEpisodes ?: emptyList()
     }
 
@@ -143,6 +147,7 @@ class KickAssAnime :
         TODO("Not yet implemented")
     }
 
+    // ============================ Video Links =============================
     override fun videoListRequest(episode: SEpisode): Request {
         val url = apiUrl + episode.url.replace("/ep-", "/episode/ep-")
         return GET(url)
@@ -163,6 +168,7 @@ class KickAssAnime :
         return videoList
     }
 
+    // =========================== Anime Details ============================
     override fun getAnimeUrl(anime: SAnime) = "$baseUrl${anime.url}"
 
     override fun animeDetailsRequest(anime: SAnime) = GET(apiUrl + anime.url)
@@ -201,6 +207,7 @@ class KickAssAnime :
         }
     }
 
+    // =============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request = throw UnsupportedOperationException()
     override fun searchAnimeParse(response: Response) = throw UnsupportedOperationException()
 
@@ -274,8 +281,10 @@ class KickAssAnime :
         return AnimesPage(listOf(details), false)
     }
 
+    // ============================== Filters ===============================
     override fun getFilterList(): AnimeFilterList = KickAssAnimeFilters.FILTER_LIST
 
+    // =============================== Latest ===============================
     override fun latestUpdatesParse(response: Response): AnimesPage {
         val data = response.parseAs<RecentsResponseDto>()
         val animes = data.result.map(::popularAnimeFromObject)
@@ -283,6 +292,8 @@ class KickAssAnime :
     }
 
     override fun latestUpdatesRequest(page: Int) = GET("$apiUrl/recent?type=all&page=$page")
+
+    // ============================= Utilities ==============================
 
     private fun String.getLocale(): String = LOCALE.firstOrNull { it.first == this }?.second ?: ""
 
@@ -363,6 +374,7 @@ class KickAssAnime :
         private const val PREF_DOMAIN_KEY = "preferred_domain"
         private const val PREF_DOMAIN_TITLE = "Preferred domain (requires app restart)"
 
+        // Check domains here: https://kickassanime.cx/
         private val DOMAINS = listOf(
             "kaa.lt" to "kaa.lt (Search)",
             "kickass-anime.ru" to "kickass-anime.ru",
@@ -380,6 +392,7 @@ class KickAssAnime :
         private val PREF_HOSTER_DEFAULT = SERVERS.toSet()
     }
 
+    // ============================== Settings ==============================
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context).apply {
             key = PREF_DOMAIN_KEY

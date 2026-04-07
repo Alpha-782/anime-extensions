@@ -368,11 +368,12 @@ class KickAssAnime :
         private val PREF_DOMAIN_ENTRIES = arrayOf(
             "kickass-anime.ru",
             "kickass-anime.ro",
+            "kaa.lt",
             "kaa.to",
             "kaa.rs",
-            "kaa.si",
+            "kaa.si (May have SSLHandshakeException error)",
         )
-        private val PREF_DOMAIN_ENTRY_VALUES = PREF_DOMAIN_ENTRIES.map { "https://$it" }.toTypedArray()
+        private val PREF_DOMAIN_ENTRY_VALUES = PREF_DOMAIN_ENTRIES.map { "https://${it.substringBefore(" ")}" }.toTypedArray()
         private val PREF_DOMAIN_DEFAULT = PREF_DOMAIN_ENTRY_VALUES[0]
 
         private const val PREF_HOSTER_KEY = "hoster_selection"

@@ -365,15 +365,16 @@ class KickAssAnime :
         private const val PREF_DOMAIN_TITLE = "Preferred domain (requires app restart)"
 
         // Check domains here: https://kickassanime.cx/
-        private val PREF_DOMAIN_ENTRIES = arrayOf(
-            "kickass-anime.ru",
-            "kickass-anime.ro",
-            "kaa.lt",
-            "kaa.to",
-            "kaa.rs",
-            "kaa.si (May have SSLHandshakeException error)",
+        private val DOMAINS = listOf(
+            "kickass-anime.ru" to "kickass-anime.ru",
+            "kickass-anime.ro" to "kickass-anime.ro",
+            "kaa.lt" to "kaa.lt",
+            "kaa.to" to "kaa.to",
+            "kaa.rs" to "kaa.rs",
+            "kaa.si" to "kaa.si (May have SSLHandshakeException error)",
         )
-        private val PREF_DOMAIN_ENTRY_VALUES = PREF_DOMAIN_ENTRIES.map { "https://${it.substringBefore(" ")}" }.toTypedArray()
+        private val PREF_DOMAIN_ENTRIES = DOMAINS.map { it.second }.toTypedArray()
+        private val PREF_DOMAIN_ENTRY_VALUES = DOMAINS.map { "https://${it.first}" }.toTypedArray()
         private val PREF_DOMAIN_DEFAULT = PREF_DOMAIN_ENTRY_VALUES[0]
 
         private const val PREF_HOSTER_KEY = "hoster_selection"

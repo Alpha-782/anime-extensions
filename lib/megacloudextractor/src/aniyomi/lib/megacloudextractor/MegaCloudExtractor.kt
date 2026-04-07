@@ -31,17 +31,23 @@ class MegaCloudExtractor(
     }
 
     fun getVideosFromUrl(url: String, type: String, name: String): List<Video> {
-        val fixedUrl = try {
-            url.toHttpUrl().let {
-                if (it.host == "megacloud.blog") {
-                    it.newBuilder().host("megacloud.tv").build().toString()
-                } else {
-                    url
-                }
-            }
-        } catch (_: Exception) {
-            url
+        val parsedUrl = try {
+            url.toHttpUrl()
+        } catch (_: IllegalArgumentException) {
+            null
         }
+
+        val safeUrl = parsedUrl?.let {
+            if (it.host == "megacloud.blog") {
+                it.newBuilder().host("megacloud.tv").build()
+            } else {
+                it
+            }
+        }
+
+        val fixedUrl = safeUrl?.toString() ?: url
+        val host = safeUrl?.host ?: fixedUrl.toHttpUrl().host
+
         val videos = getVideoDto(fixedUrl)
         if (videos.isEmpty()) return emptyList()
 
@@ -56,7 +62,7 @@ class MegaCloudExtractor(
                 video.m3u8,
                 videoNameGen = { "$name - $it - $type" },
                 subtitleList = subtitles,
-                referer = "https://${fixedUrl.toHttpUrl().host}/",
+                referer = "https://$host/",
             )
         }
     }

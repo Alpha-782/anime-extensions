@@ -13,6 +13,9 @@ import okhttp3.OkHttpClient
 import uy.kohesive.injekt.injectLazy
 import java.net.URLEncoder
 
+// Thanks to https://github.com/yogesh-hacker/MediaVanced/
+// Keys fetched from https://github.com/yogesh-hacker/MegacloudKeys/
+
 class MegaCloudExtractor(
     private val client: OkHttpClient,
     private val headers: Headers,
@@ -24,11 +27,12 @@ class MegaCloudExtractor(
 
     companion object {
         private const val SOURCES_URL = "/embed-2/v3/e-1/getSources?id="
-        private val SOURCES_SPLITTER_REGEX = Regex("""/e-\d+/""")
+        private const val SOURCES_SPLITTER = "/e-1/"
     }
 
     fun getVideosFromUrl(url: String, type: String, name: String): List<Video> {
-        val videos = getVideoDto(url)
+        val fixedUrl = url.replace("megacloud.blog", "megacloud.tv")
+        val videos = getVideoDto(fixedUrl)
         if (videos.isEmpty()) return emptyList()
 
         val subtitles = videos.first().tracks
@@ -42,17 +46,15 @@ class MegaCloudExtractor(
                 video.m3u8,
                 videoNameGen = { "$name - $it - $type" },
                 subtitleList = subtitles,
-                referer = "https://${url.toHttpUrl().host}/",
+                referer = "https://${fixedUrl.toHttpUrl().host}/",
             )
         }
     }
 
     private fun getVideoDto(url: String): List<VideoDto> {
-        val match = SOURCES_SPLITTER_REGEX.find(url)
-        val id = match?.let { url.substring(it.range.last + 1) }
-            ?.substringBefore("?", "")
-            ?.ifEmpty { null }
-            ?: throw Exception("Failed to extract ID from URL")
+        val id = url.substringAfter(SOURCES_SPLITTER, "")
+            .substringBefore("?", "")
+            .ifEmpty { throw Exception("Failed to extract ID from URL") }
 
         val host = runCatching {
             url.toHttpUrl().host
@@ -68,9 +70,8 @@ class MegaCloudExtractor(
 
         val responseNonce = client.newCall(GET(url, megaCloudHeaders))
             .execute().use { it.body.string() }
-
-        val match1 = Regex("""[a-zA-Z0-9]{48}""").find(responseNonce)
-        val match2 = Regex("""([a-zA-Z0-9]{16})[^a-zA-Z0-9]+([a-zA-Z0-9]{16})[^a-zA-Z0-9]+([a-zA-Z0-9]{16})""").find(responseNonce)
+        val match1 = Regex("""\b[a-zA-Z0-9]{48}\b""").find(responseNonce)
+        val match2 = Regex("""\b([a-zA-Z0-9]{16})\b.*?\b([a-zA-Z0-9]{16})\b.*?\b([a-zA-Z0-9]{16})\b""").find(responseNonce)
 
         val nonce = match1?.value ?: match2?.let {
             it.groupValues[1] + it.groupValues[2] + it.groupValues[3]
@@ -78,11 +79,6 @@ class MegaCloudExtractor(
 
         val srcRes = client.newCall(GET("${megaCloudServerUrl}${SOURCES_URL}$id&_k=$nonce", megaCloudHeaders))
             .execute().use { it.body.string() }
-
-        if (!srcRes.trimStart().startsWith("{")) {
-            throw IllegalStateException("MegaCloud API returned non-JSON response (likely blocked or changed)")
-        }
-
         val data = json.decodeFromString<SourceResponseDto>(srcRes)
 
         val key by lazy { requestNewKey() }
@@ -102,12 +98,7 @@ class MegaCloudExtractor(
 
                 val decryptedResponse = client.newCall(GET(fullUrl))
                     .execute().use { it.body.string() }
-
-                if (!decryptedResponse.trimStart().startsWith("{")) {
-                    throw IllegalStateException("Decryption API returned non-JSON response")
-                }
-
-                Regex(""""file"\s*:\s*"([^"]+)"""")
+                Regex("\"file\":\"(.*?)\"")
                     .find(decryptedResponse)
                     ?.groupValues?.get(1)
                     ?: throw Exception("Video URL not found in decrypted response")
@@ -130,13 +121,23 @@ class MegaCloudExtractor(
         }
 
     @Serializable
-    data class VideoDto(val m3u8: String = "", val tracks: List<TrackDto>? = null)
+    data class VideoDto(
+        val m3u8: String = "",
+        val tracks: List<TrackDto>? = null,
+    )
 
     @Serializable
-    data class SourceResponseDto(val sources: List<SourceDto>, val encrypted: Boolean = true, val tracks: List<TrackDto>? = null)
+    data class SourceResponseDto(
+        val sources: List<SourceDto>,
+        val encrypted: Boolean = true,
+        val tracks: List<TrackDto>? = null,
+    )
 
     @Serializable
-    data class SourceDto(val file: String, val type: String)
+    data class SourceDto(
+        val file: String,
+        val type: String, // 'hls'
+    )
 
     @Serializable
     data class TrackDto(val file: String, val kind: String, val label: String = "")

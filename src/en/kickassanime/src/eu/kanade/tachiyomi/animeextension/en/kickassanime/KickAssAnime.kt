@@ -93,7 +93,6 @@ class KickAssAnime :
         .parseAs()
 
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> = coroutineScope {
-        // Fetch what languages are available for this anime
         val languages = client.newCall(
             GET("$apiUrl${anime.url}/language"),
         ).awaitSuccess().parseAs<LanguagesDto>().result
@@ -101,7 +100,6 @@ class KickAssAnime :
         val prefLang = preferences.getString(PREF_AUDIO_LANG_KEY, PREF_AUDIO_LANG_DEFAULT)!!
         val pref2ndLang = preferences.getString(PREF_AUDIO_LANG_KEY_2ND, PREF_AUDIO_LANG_DEFAULT_2ND)!!
 
-        // Try preferred language first, then others
         val langOrder = languages
             .sortedWith(
                 compareBy(
@@ -139,13 +137,10 @@ class KickAssAnime :
                 break
             }
         }
-        // If nothing was found, return empty list
         foundEpisodes ?: emptyList()
     }
 
-    override fun episodeListParse(response: Response): List<SEpisode> {
-        TODO("Not yet implemented")
-    }
+    override fun episodeListParse(response: Response): List<SEpisode> = throw UnsupportedOperationException()
 
     // ============================ Video Links =============================
     override fun videoListRequest(episode: SEpisode): Request {
@@ -193,13 +188,7 @@ class KickAssAnime :
                 append("Available Dub Languages: ${languages.result.joinToString(", ") { t -> t.getLocale() }}\n")
                 append(
                     "Season: ${anime.season.replaceFirstChar {
-                        if (it.isLowerCase()) {
-                            it.titlecase(
-                                Locale.ROOT,
-                            )
-                        } else {
-                            it.toString()
-                        }
+                        if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
                     }}\n",
                 )
                 append("Year: ${anime.year}")
@@ -256,20 +245,18 @@ class KickAssAnime :
         }
     }
 
-    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage {
-        return if (query.startsWith(PREFIX_SEARCH)) {
-            val slug = query.removePrefix(PREFIX_SEARCH)
-            client.newCall(GET("$baseUrl/api/show/$slug"))
-                .awaitSuccess()
-                .use(::searchAnimeBySlugParse)
-        } else {
-            val params = KickAssAnimeFilters.getSearchParameters(filters)
-            return client.newCall(searchAnimeRequest(page, query, params))
-                .awaitSuccess()
-                .let { response ->
-                    searchAnimeParse(response, page)
-                }
-        }
+    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage = if (query.startsWith(PREFIX_SEARCH)) {
+        val slug = query.removePrefix(PREFIX_SEARCH)
+        client.newCall(GET("$baseUrl/api/show/$slug"))
+            .awaitSuccess()
+            .use(::searchAnimeBySlugParse)
+    } else {
+        val params = KickAssAnimeFilters.getSearchParameters(filters)
+        client.newCall(searchAnimeRequest(page, query, params))
+            .awaitSuccess()
+            .let { response ->
+                searchAnimeParse(response, page)
+            }
     }
 
     private fun searchAnimeBySlugParse(response: Response): AnimesPage {
@@ -294,7 +281,6 @@ class KickAssAnime :
     override fun latestUpdatesRequest(page: Int) = GET("$apiUrl/recent?type=all&page=$page")
 
     // ============================= Utilities ==============================
-
     private fun String.getLocale(): String = LOCALE.firstOrNull { it.first == this }?.second ?: ""
 
     private fun String.parseStatus() = when (this) {
@@ -374,7 +360,6 @@ class KickAssAnime :
         private const val PREF_DOMAIN_KEY = "preferred_domain"
         private const val PREF_DOMAIN_TITLE = "Preferred domain (requires app restart)"
 
-        // Check domains here: https://kickassanime.cx/
         private val DOMAINS = listOf(
             "kaa.lt" to "kaa.lt (Search)",
             "kickass-anime.ru" to "kickass-anime.ru",

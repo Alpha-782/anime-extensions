@@ -93,6 +93,7 @@ class KickAssAnime :
         .parseAs()
 
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> = coroutineScope {
+        // Fetch what languages are available for this anime
         val languages = client.newCall(
             GET("$apiUrl${anime.url}/language"),
         ).awaitSuccess().parseAs<LanguagesDto>().result
@@ -100,6 +101,7 @@ class KickAssAnime :
         val prefLang = preferences.getString(PREF_AUDIO_LANG_KEY, PREF_AUDIO_LANG_DEFAULT)!!
         val pref2ndLang = preferences.getString(PREF_AUDIO_LANG_KEY_2ND, PREF_AUDIO_LANG_DEFAULT_2ND)!!
 
+        // Try preferred language first, then others
         val langOrder = languages
             .sortedWith(
                 compareBy(
@@ -108,6 +110,7 @@ class KickAssAnime :
                 ),
             )
 
+        // If nothing was found, return empty list
         var foundEpisodes: List<SEpisode>? = null
 
         for (lang in langOrder) {
@@ -187,7 +190,7 @@ class KickAssAnime :
                 anime.synopsis?.let { append(it + "\n\n") }
                 append("Available Dub Languages: ${languages.result.joinToString(", ") { t -> t.getLocale() }}\n")
 
-                // Append season if it exists, saw errors in Black Cat without fix.
+                // Append season if it exists, saw errors in i.e. Black Cat without fix.
                 anime.season?.let { seasonStr ->
                     append(
                         "Season: ${seasonStr.replaceFirstChar {

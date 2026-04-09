@@ -140,6 +140,8 @@ class KickAssAnime :
                 break
             }
         }
+
+        // If nothing was found, return empty list
         foundEpisodes ?: emptyList()
     }
 

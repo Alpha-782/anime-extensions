@@ -251,9 +251,11 @@ class KickAssAnime :
                 if (encodedFilters.isNotEmpty()) put("filters", encodedFilters)
             }.toString().toRequestBody("application/json".toMediaType())
 
-            POST("$SEARCH_BASE_URL/api/fsearch", body = data, headers = newHeaders) // Again, primary URL search only.
+            // Again, primary URL search only.
+            POST("$SEARCH_BASE_URL/api/fsearch", body = data, headers = newHeaders)
         }
     }
+
     // Same thing here. Rewrote to use main URL instead of using URLs that redirect to main URL.
     override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage = if (query.startsWith(PREFIX_SEARCH)) {
         val slug = query.removePrefix(PREFIX_SEARCH)

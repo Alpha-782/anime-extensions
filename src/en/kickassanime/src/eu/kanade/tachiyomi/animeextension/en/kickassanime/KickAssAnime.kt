@@ -227,7 +227,7 @@ class KickAssAnime :
         val newHeaders = headers.newBuilder()
             .add("Accept", "application/json, text/plain, */*")
             .add("Content-Type", "application/json")
-            .add("Host", SEARCH_BASE_URL.toHttpUrl().host)
+            .add("Host", SEARCH_BASE_URL.toHttpUrl().host) // Only the primary URL does the search, other domains are redirects to it.
             .add("Referer", "$SEARCH_BASE_URL/search?q=$query")
             .build()
 
@@ -237,7 +237,7 @@ class KickAssAnime :
 
         return if (query.isBlank()) {
             val url = buildString {
-                append(SEARCH_BASE_URL)
+                append(SEARCH_BASE_URL) // Fixes redirect search
                 append("/api/anime")
                 append("?page=$page")
                 if (encodedFilters.isNotEmpty()) append("&filters=$encodedFilters")
@@ -251,10 +251,10 @@ class KickAssAnime :
                 if (encodedFilters.isNotEmpty()) put("filters", encodedFilters)
             }.toString().toRequestBody("application/json".toMediaType())
 
-            POST("$SEARCH_BASE_URL/api/fsearch", body = data, headers = newHeaders)
+            POST("$SEARCH_BASE_URL/api/fsearch", body = data, headers = newHeaders) // Again, primary URL search only.
         }
     }
-
+    // Same thing here. Rewrote to use main URL instead of using URLs that redirect to main URL.
     override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage = if (query.startsWith(PREFIX_SEARCH)) {
         val slug = query.removePrefix(PREFIX_SEARCH)
         client.newCall(GET("$SEARCH_BASE_URL/api/show/$slug"))
@@ -323,7 +323,7 @@ class KickAssAnime :
         return this
     }
 
-    private fun SharedPreferences.fixHosterSelection(): SharedPreferences {
+    private fun SharedPreferences.fixHosterSelection(): SharedPreferences { // CatStream is a new player/server on the KAA website.
         val currentSelection = getStringSet(PREF_HOSTER_KEY, PREF_HOSTER_DEFAULT)!!
         if (!currentSelection.contains("CatStream")) {
             edit()

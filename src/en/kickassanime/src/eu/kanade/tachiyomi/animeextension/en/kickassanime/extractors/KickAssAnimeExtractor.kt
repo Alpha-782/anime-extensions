@@ -20,7 +20,7 @@ class KickAssAnimeExtractor(
 ) {
     private val playlistUtils by lazy { PlaylistUtils(client, headers) }
 
-    fun videosFromUrl(url: String, name: String): List<Video> {
+    fun videosFromUrl(url: String, name: String): List<Video> { // Video player path
         val finalUrl = if (url.contains("/vast")) {
             url.toHttpUrl().newBuilder()
                 .encodedPath("/cat-player/player")
@@ -88,7 +88,7 @@ class KickAssAnimeExtractor(
         val rawSubtitles = videoObject.subtitles.map {
             val subUrl: String = it.src.let { src ->
                 when {
-                    src.startsWith("//") -> "https:$src"
+                    src.startsWith("//") -> "https:$src" // Fixed subtitles
                     src.startsWith("/") -> "https://$host$src"
                     else -> src
                 }
@@ -120,7 +120,7 @@ class KickAssAnimeExtractor(
         }
     }
 
-    private fun parseNewPlayer(cleanHtml: String, url: String, name: String): List<Video> {
+    private fun parseNewPlayer(cleanHtml: String, url: String, name: String): List<Video> { // New video players used on KickAssAnime
         val host = url.toHttpUrl().host
         val playerHeaders = headers.newBuilder()
             .set("Referer", url)
@@ -143,7 +143,7 @@ class KickAssAnimeExtractor(
             val lang = match.groupValues[1]
             val subName = match.groupValues[2]
             val subUrl = match.groupValues[3]
-                .replace("https:///", "https://")
+                .replace("https:///", "https://") // Fixes CatStream subtitles not appearing
                 .replace("\\/", "/")
 
             Track(subUrl, "$subName ($lang)")
@@ -173,7 +173,7 @@ class KickAssAnimeExtractor(
 
     private fun getSignature(html: String, server: String, query: String, key: ByteArray): Triple<String, String, String>? {
         val order = when (server) {
-            "VidStreaming", "DuckStream" -> listOf("IP", "USERAGENT", "ROUTE", "MID", "TIMESTAMP", "KEY")
+            "VidStreaming", "DuckStream" -> listOf("IP", "USERAGENT", "ROUTE", "MID", "TIMESTAMP", "KEY") // Combined them as they were identical
             "BirdStream" -> listOf("IP", "USERAGENT", "ROUTE", "MID", "KEY")
             else -> return null
         }

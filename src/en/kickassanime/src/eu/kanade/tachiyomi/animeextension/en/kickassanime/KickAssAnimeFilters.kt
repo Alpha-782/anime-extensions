@@ -87,7 +87,7 @@ object KickAssAnimeFilters {
     }
 
     private object KickAssAnimeFiltersData {
-        val GENRE = arrayOf(
+        val GENRE = arrayOf( // Updated filter array to match current website.
             Pair("Action", "Action"),
             Pair("Adult Cast", "Adult Cast"),
             Pair("Adventure", "Adventure"),
@@ -167,7 +167,7 @@ object KickAssAnimeFilters {
             Pair("Workplace", "Workplace"),
         )
 
-        val YEAR = arrayOf(
+        val YEAR = arrayOf( // Updated year array to match current website descending instead of ascending.
             Pair("All", ""),
             Pair("2027", "2027"), // For later/upcoming releases as there are none on website now
             Pair("2026", "2026"),
@@ -223,7 +223,7 @@ object KickAssAnimeFilters {
             Pair("1974", "1974"),
             Pair("1972", "1972"),
             Pair("1971", "1971"),
-            Pair("1967", "1967"),
+            Pair("1967", "1967"), // No more releases before 1967.
         )
 
         val STATUS = arrayOf(
@@ -235,7 +235,7 @@ object KickAssAnimeFilters {
         val TYPE = arrayOf(
             Pair("All", ""),
             Pair("TV", "\"tv\""),
-            Pair("Movie", "\"movie\""),
+            Pair("Movie", "\"movie\""), // Updated type to match website.
             Pair("ONA", "\"ona\""),
             Pair("OVA", "\"ova\""),
             Pair("SPECIAL", "\"special\""),

@@ -347,6 +347,7 @@ class KickAssAnime :
             Pair("en-US", "English"),
             Pair("es-ES", "Spanish (España)"),
             Pair("ko-KR", "Korean"),
+            Pair("zh-CN", "Chinese (Simplified)"),
         )
 
         const val PREFIX_SEARCH = "slug:"

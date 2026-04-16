@@ -101,20 +101,25 @@ class KickAssAnimeExtractor(
         } else {
             rawSubtitles
         }
-        fun getVideoHeaders(baseHeaders: Headers, referer: String, videoUrl: String): Headers = baseHeaders.newBuilder().apply {
+
+        val videoHeaders = headers.newBuilder().apply {
             add("Accept", "*/*")
             add("Origin", "https://$host")
             add("Referer", finalUrl)
         }.build()
+        val localPlaylistUtils = PlaylistUtils(client, videoHeaders)
 
         return when {
             videoObject.hls.isBlank() ->
-                playlistUtils.extractFromDash(videoObject.playlistUrl, videoNameGen = { res -> "$name - $res" }, subtitleList = subtitles)
+                localPlaylistUtils.extractFromDash(
+                    videoObject.playlistUrl,
+                    videoNameGen = { res -> "$name - $res" },
+                    subtitleList = subtitles,
+                )
 
-            else -> playlistUtils.extractFromHls(
+            else -> localPlaylistUtils.extractFromHls(
                 videoObject.playlistUrl,
                 videoNameGen = { "$name - $it" },
-                videoHeadersGen = ::getVideoHeaders,
                 subtitleList = subtitles,
             )
         }
@@ -149,17 +154,10 @@ class KickAssAnimeExtractor(
             Track(subUrl, "$subName ($lang)")
         }.toList()
 
-        fun getVideoHeaders(baseHeaders: Headers, referer: String, videoUrl: String): Headers = baseHeaders.newBuilder().apply {
-            add("Accept", "*/*")
-            add("Origin", "https://$host")
-            add("Referer", url)
-        }.build()
-
         return if (manifestUrl.contains(".m3u8")) {
             localPlaylistUtils.extractFromHls(
                 manifestUrl,
                 videoNameGen = { "$name - $it" },
-                videoHeadersGen = ::getVideoHeaders,
                 subtitleList = subtitles,
             )
         } else {

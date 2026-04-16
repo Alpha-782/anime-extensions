@@ -326,10 +326,14 @@ class KickAssAnime :
     }
 
     private fun SharedPreferences.fixHosterSelection(): SharedPreferences { // CatStream is a new player/server on the KAA website.
-        val currentSelection = getStringSet(PREF_HOSTER_KEY, PREF_HOSTER_DEFAULT)!!
+        val currentSelection = getStringSet(PREF_HOSTER_KEY, PREF_HOSTER_DEFAULT) ?: PREF_HOSTER_DEFAULT
         if (!currentSelection.contains("CatStream")) {
+            val updatedSelection = currentSelection.toMutableSet().apply {
+                add("CatStream")
+            }
+
             edit()
-                .putStringSet(PREF_HOSTER_KEY, PREF_HOSTER_DEFAULT)
+                .putStringSet(PREF_HOSTER_KEY, updatedSelection)
                 .apply()
         }
         return this

@@ -354,8 +354,16 @@ class HexaWatch :
     }
 
     // ============================ Video Links =============================
+
+    /**
+     * Intentionally unsupported. Video extraction requires complex async flows
+     * (CAP token generation, custom headers, decryption API calls) that cannot
+     * be represented in a synchronous Request/Response paradigm.
+     * The framework calls [getVideoList] instead.
+     */
     override fun videoListRequest(episode: SEpisode): Request = throw UnsupportedOperationException()
 
+    /** @see videoListRequest */
     override fun videoListParse(response: Response): List<Video> = throw UnsupportedOperationException()
 
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
@@ -365,9 +373,8 @@ class HexaWatch :
         val path = episode.url.split("/").drop(1)
         val mediaType = path.first()
 
-        // Spoofed User Agent is required for the CAP and decryption APIs
         val spoofedHeaders = headers.newBuilder()
-            .set("User-Agent", "Mozilla/5.0 (Linux, Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+            .set("User-Agent", SPOOFED_USER_AGENT)
             .build()
 
         val capToken = client.newCall(
@@ -392,12 +399,10 @@ class HexaWatch :
             .awaitSuccess()
             .use { it.body.string() }
 
-        // Detect Cloudflare blocks or empty payloads before sending to decryption
         if (rawEncryptedText.isBlank() || rawEncryptedText.contains("<!DOCTYPE") || rawEncryptedText.contains("<html")) {
             throw Exception("Cloudflare blocked the TMDB API request. Please try again.")
         }
 
-        // Clean the text to ensure no literal quotes break the decryption API
         val encryptedText = rawEncryptedText.trim('"', ' ', '\n', '\r')
 
         if (encryptedText.length < 50) {
@@ -408,11 +413,7 @@ class HexaWatch :
         val decryptionPayload = json.encodeToString(mapOf("text" to encryptedText, "key" to key))
         val decRequestBody = decryptionPayload.toRequestBody("application/json".toMediaType())
 
-        val decHeaders = okhttp3.Headers.Builder().apply {
-            add("User-Agent", "Mozilla/5.0 (Linux, Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
-            add("Content-Type", "application/json")
-            add("Accept", "application/json")
-        }.build()
+        val decHeaders = buildSpoofedJsonHeaders()
 
         val decResponse = client.newCall(
             Request.Builder()
@@ -422,7 +423,6 @@ class HexaWatch :
                 .build(),
         ).awaitSuccess().use { it.parseAs<DecryptionResponseDto>() }
 
-        // Check if result is a valid object. If it's a string (e.g., ""), decryption failed on their end.
         val resultElement = decResponse.result
         if (resultElement == null || resultElement !is JsonObject) {
             throw Exception("The server failed to decrypt the video payload. API returned: $resultElement")
@@ -472,13 +472,7 @@ class HexaWatch :
             addQueryParameter("key", "wyzie-c906fb1acd0204957b95582dfdaa498f")
         }.build()
 
-        val subHeaders = okhttp3.Headers.Builder().apply {
-            add("User-Agent", "Mozilla/5.0 (Linux, Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
-            add("Accept", "*/*")
-            add("Accept-Language", "en-US,en;q=0.9")
-            add("Referer", "https://hexa.su/")
-            add("Origin", "https://hexa.su")
-        }.build()
+        val subHeaders = buildSpoofedCorsHeaders()
 
         return try {
             val preferredSubLang = preferences.subLangPref
@@ -489,7 +483,7 @@ class HexaWatch :
             subtitles
                 .take(subLimit)
                 .map { sub ->
-                    val langLabel = sub.display ?: sub.language // Use full name if available
+                    val langLabel = sub.display ?: sub.language
                     val ccLabel = if (sub.isHearingImpaired) "$langLabel (CC)" else langLabel
                     Track(sub.url, ccLabel)
                 }
@@ -556,6 +550,9 @@ class HexaWatch :
 
         private val GET_SUBTITLES_REGEX by lazy { "/(movie|tv)/(\\d+)(?:/season/(\\d+)/episode/(\\d+))?".toRegex() }
 
+        // Universal User-Agent
+        private const val SPOOFED_USER_AGENT = "Mozilla/5.0 (Linux, Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
         private const val PREF_QUALITY_KEY = "pref_quality"
         private const val PREF_QUALITY_DEFAULT = "1080"
 
@@ -567,6 +564,28 @@ class HexaWatch :
 
         private const val PREF_SUB_KEY = "pref_sub"
         private const val PREF_SUB_DEFAULT = "en"
+
+        /**
+         * Builds OkHttp Headers object spoofing a mobile Chrome browser.
+         * Used for APIs that strictly block non-browser traffic.
+         */
+        private fun buildBaseSpoofedHeaders() = okhttp3.Headers.Builder().apply {
+            add("User-Agent", SPOOFED_USER_AGENT)
+        }
+
+        /** Headers for the decryption POST API */
+        private fun buildSpoofedJsonHeaders() = buildBaseSpoofedHeaders().apply {
+            add("Content-Type", "application/json")
+            add("Accept", "application/json")
+        }.build()
+
+        /** Headers for the Subtitle GET API */
+        private fun buildSpoofedCorsHeaders() = buildBaseSpoofedHeaders().apply {
+            add("Accept", "*/*")
+            add("Accept-Language", "en-US,en;q=0.9")
+            add("Referer", "https://hexa.su/")
+            add("Origin", "https://hexa.su")
+        }.build()
 
         private val SUB_LANGS = listOf(
             Pair("ar", "Arabic"),
@@ -597,7 +616,9 @@ class HexaWatch :
 
         fun parseDate(dateStr: String?): Long = runCatching {
             val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            formatter.parse(dateStr ?: "")?.time ?: 0L
+            synchronized(formatter) {
+                formatter.parse(dateStr ?: "")?.time ?: 0L
+            }
         }.getOrDefault(0L)
     }
 

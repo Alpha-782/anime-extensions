@@ -287,11 +287,11 @@ class OneTwoThreeCine :
 
     // ========================= Encryption ============================
 
-    private suspend fun encrypt(text: String): String = apiClient.newCall(GET("https://enc-dec.app/api/enc-movies-flix?text=$text"))
+    private suspend fun encrypt(text: String): String = client.newCall(GET("https://enc-dec.app/api/enc-movies-flix?text=$text"))
         .awaitSuccess()
         .parseAs<ResultResponse>().result
 
-    private suspend fun decrypt(text: String): String = apiClient.newCall(GET("https://enc-dec.app/api/dec-movies-flix?text=$text"))
+    private suspend fun decrypt(text: String): String = client.newCall(GET("https://enc-dec.app/api/dec-movies-flix?text=$text"))
         .awaitSuccess()
         .parseAs<DecryptedIframeResponse>().result.url
 

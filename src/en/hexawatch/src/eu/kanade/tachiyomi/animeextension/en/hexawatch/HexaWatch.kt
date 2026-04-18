@@ -616,9 +616,7 @@ class HexaWatch :
 
         fun parseDate(dateStr: String?): Long = runCatching {
             val formatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            synchronized(formatter) {
-                formatter.parse(dateStr ?: "")?.time ?: 0L
-            }
+            formatter.parse(dateStr ?: "")?.time ?: 0L
         }.getOrDefault(0L)
     }
 

@@ -227,7 +227,7 @@ class OneTwoThreeCine :
         ).awaitSuccess().parseAs<EpisodesResponse>()
 
         if (episodesResponse.status != "ok") {
-            throw Exception("Failed to fetch episodes: ${episodesResponse.status}")
+            throw IllegalStateException("Failed to fetch episodes: ${episodesResponse.status}")
         }
 
         return episodesResponse.result.seasons.flatMap { season ->

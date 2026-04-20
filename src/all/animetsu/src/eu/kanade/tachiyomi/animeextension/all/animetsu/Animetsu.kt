@@ -1,3 +1,4 @@
+// Animetsu.kt
 package eu.kanade.tachiyomi.animeextension.all.animetsu
 
 import android.content.SharedPreferences
@@ -65,7 +66,7 @@ class Animetsu :
     private fun extractAnimeId(url: String): String = url.substringAfterLast("/")
 
     private fun apiHeaders(referer: String = "$baseUrl/browse"): Headers = Headers.Builder()
-        .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0")
+        .add("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
         .add("Accept", "application/json, text/plain, */*")
         .add("Accept-Language", "en-US,en;q=0.9")
         .add("Referer", referer)
@@ -90,9 +91,15 @@ class Animetsu :
     }
 
     // =============================== Latest ===============================
-    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/anime/search/?sort=date_desc&page=$page&per_page=35", apiHeaders())
+    override fun latestUpdatesRequest(page: Int): Request = GET("$apiUrl/anime/recent?page=$page&per_page=35", apiHeaders())
 
-    override fun latestUpdatesParse(response: Response): AnimesPage = popularAnimeParse(response)
+    override fun latestUpdatesParse(response: Response): AnimesPage {
+        val dto = response.parseAs<AnimetsuRecentDto>()
+        val filteredResults = if (hideAdult) dto.results.filter { !it.isAdult } else dto.results
+        val animes = filteredResults.map { it.toSAnime() }
+
+        return AnimesPage(animes, dto.currentPage < dto.lastPage)
+    }
 
     // =============================== Search ===============================
     override fun getFilterList(): AnimeFilterList = AnimetsuFilters.FILTER_LIST
@@ -123,21 +130,16 @@ class Animetsu :
 
     // =========================== Anime Details ============================
 
-    /**
-     * Override to handle 502 from the details API gracefully.
-     * Search results already contain all anime details (title, thumbnail, genre,
-     * status, description), so falling back to the existing SAnime is safe.
-     */
     override suspend fun getAnimeDetails(anime: SAnime): SAnime = try {
         val response = client.newCall(animeDetailsRequest(anime)).awaitSuccess()
         animeDetailsParse(response)
     } catch (_: Exception) {
-        anime // Fallback: return existing anime populated from search
+        anime
     }
 
     override fun getAnimeUrl(anime: SAnime): String = "$baseUrl/anime/${extractAnimeId(anime.url)}"
 
-    override fun animeDetailsRequest(anime: SAnime): Request = GET("$apiUrl/anime/${extractAnimeId(anime.url)}", apiHeaders(getAnimeUrl(anime)))
+    override fun animeDetailsRequest(anime: SAnime): Request = GET("$apiUrl/anime/info/${extractAnimeId(anime.url)}", apiHeaders(getAnimeUrl(anime)))
 
     override fun animeDetailsParse(response: Response): SAnime = try {
         response.parseAs<AnimetsuAnimeDto>().toSAnime()
@@ -149,11 +151,6 @@ class Animetsu :
 
     // ============================== Episodes ==============================
 
-    /**
-     * Override to handle 502 from episode/details API gracefully.
-     * Tries multiple endpoints, then falls back to generating episodes
-     * from totalEps stored in SAnime.artist during search.
-     */
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> {
         val animeId = extractAnimeId(anime.url)
         val referer = "$baseUrl/anime/$animeId"
@@ -177,7 +174,7 @@ class Animetsu :
                         episode_number = epNum.toFloat()
                         date_upload = dto.airedAt?.toDate() ?: 0L
                     }
-                }.reversed()
+                }.sortedByDescending { it.episode_number }
             }
         } catch (_: Exception) { }
 
@@ -200,17 +197,21 @@ class Animetsu :
                         episode_number = epNum.toFloat()
                         date_upload = ep.airedAt?.toDate() ?: 0L
                     }
-                }.reversed()
+                }.sortedByDescending { it.episode_number }
             }
-            // Use totalEps from details response
             val totalEps = dto.totalEps
             if (totalEps != null && totalEps > 0) {
                 return generateEpisodes(animeId, totalEps)
             }
         } catch (_: Exception) { }
 
-        // Attempt 3: Fallback from totalEps stored in SAnime.artist during search
-        val totalEps = anime.artist?.toIntOrNull()
+        // Attempt 3: Fallback from totalEps found in description ("Episodes: 12")
+        val totalEps = anime.description
+            ?.substringAfter("Episodes: ", "")
+            ?.substringBefore("\n")
+            ?.substringBefore("|")
+            ?.trim()
+            ?.toIntOrNull()
         if (totalEps != null && totalEps > 0) {
             return generateEpisodes(animeId, totalEps)
         }
@@ -244,7 +245,7 @@ class Animetsu :
                 episode_number = epNum.toFloat()
                 date_upload = dto.airedAt?.toDate() ?: 0L
             }
-        }.reversed()
+        }.sortedByDescending { it.episode_number }
     }
 
     // ============================ Video Links =============================
@@ -261,7 +262,6 @@ class Animetsu :
 
         val allServers = serverResponse.parseAs<List<AnimetsuServerDto>>()
 
-        // Filter servers based on preference; fall back to all if preferred is unavailable
         val servers = if (preferredServer != PREF_SERVER_DEFAULT) {
             allServers.filter { it.id == preferredServer }
                 .takeIf { it.isNotEmpty() }
@@ -282,11 +282,18 @@ class Animetsu :
                         ).awaitSuccess()
 
                         val dto = sourceResponse.parseAs<AnimetsuVideoDto>()
-                        val subtitleTracks = dto.subs?.mapNotNull { sub ->
+                        val subtitleTracks = dto.subs?.map { sub ->
                             Track(sub.url, sub.lang ?: "Unknown")
                         } ?: emptyList()
 
                         val serverVideos = mutableListOf<Video>()
+                        val subLabel = when {
+                            server.id.equals("pahe", ignoreCase = true) -> " [Hard Subs]"
+                            server.id.equals("kite", ignoreCase = true) -> " [Soft Subs]"
+                            server.id.equals("zoro", ignoreCase = true) -> " [Soft Subs]"
+                            server.id.equals("meg", ignoreCase = true) -> " [Hard Subs]"
+                            else -> ""
+                        }
 
                         for (source in dto.sources) {
                             val fullUrl = when {
@@ -300,7 +307,7 @@ class Animetsu :
                                     serverVideos.add(
                                         Video(
                                             fullUrl,
-                                            "${server.id.uppercase()}: ${source.quality} ($audioLabel)",
+                                            "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
                                             fullUrl,
                                             apiHeaders(watchReferer),
                                             subtitleTracks,
@@ -308,14 +315,34 @@ class Animetsu :
                                     )
                                 }
                                 source.type?.contains("mpegurl") == true -> {
-                                    serverVideos.addAll(
-                                        playlistUtils.extractFromHls(
-                                            playlistUrl = fullUrl,
-                                            videoNameGen = { quality -> "${server.id.uppercase()}: $quality ($audioLabel)" },
-                                            referer = "$baseUrl/",
-                                            subtitleList = subtitleTracks,
-                                        ),
-                                    )
+                                    // Old HLS streams provide direct media playlists per quality rather than a master playlist.
+                                    // We construct the Video object directly to utilize the explicit quality from the API.
+                                    if (source.oldHls) {
+                                        serverVideos.add(
+                                            Video(
+                                                fullUrl,
+                                                "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
+                                                fullUrl,
+                                                apiHeaders(watchReferer),
+                                                subtitleTracks,
+                                            ),
+                                        )
+                                    } else {
+                                        serverVideos.addAll(
+                                            playlistUtils.extractFromHls(
+                                                playlistUrl = fullUrl,
+                                                videoNameGen = { quality ->
+                                                    // Format "1080P (1920X1080) - 2.15MB/s" into "1080p"
+                                                    val cleanQuality = quality.substringBefore(" ").let { q ->
+                                                        if (q.endsWith("P")) q.lowercase() else q
+                                                    }
+                                                    "${server.id.uppercase()}: $cleanQuality ($audioLabel)$subLabel"
+                                                },
+                                                referer = "$baseUrl/",
+                                                subtitleList = subtitleTracks,
+                                            ),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -388,7 +415,6 @@ class Animetsu :
 
     private fun AnimetsuAnimeDto.toSAnime() = SAnime.create().apply {
         val dto = this@toSAnime
-        // Store as /anime/{id} so baseUrl + url = correct web page for WebView
         url = "/anime/${dto.id}"
         title = when (titleLanguage) {
             "english" -> dto.title?.english
@@ -400,12 +426,156 @@ class Animetsu :
             ?: "Unknown Title"
 
         thumbnail_url = dto.coverImage?.large ?: dto.coverImage?.medium
-        genre = dto.genres?.joinToString(", ") ?: ""
+        genre = buildList {
+            dto.genres?.let { addAll(it) }
+            dto.tags?.let { addAll(it) }
+        }.joinToString(", ")
         status = parseStatus(dto.status)
-        description = dto.description?.replace("<br>", "\n")?.replace("<br/>", "\n") ?: ""
-        // Store totalEps in artist field for fallback episode generation
-        // (used when both /anime/eps/ and /anime/{id} endpoints return 502)
-        artist = dto.totalEps?.toString() ?: ""
+        description = buildDescription(dto)
+        artist = dto.staff?.firstOrNull { it.role == "Character Design" }?.name ?: ""
+        author = dto.staff?.firstOrNull { it.role == "Original Creator" }?.name
+            ?: dto.studios?.firstOrNull { it.isMain }?.name
+            ?: dto.studios?.firstOrNull()?.name
+            ?: ""
+    }
+
+    private fun buildDescription(dto: AnimetsuAnimeDto): String {
+        val desc = StringBuilder()
+
+        dto.description?.cleanHtml()?.let {
+            desc.append(it)
+        }
+
+        val meta = mutableListOf<String>()
+        dto.format?.let { meta.add(it.replace("_", " ").titleCase()) }
+        dto.source?.let { meta.add("Source: ${it.replace("_", " ").titleCase()}") }
+        dto.status?.let {
+            val statusStr = when (it) {
+                "RELEASING" -> "Airing"
+                "FINISHED" -> "Finished"
+                "NOT_YET_RELEASED" -> "Upcoming"
+                "CANCELLED" -> "Cancelled"
+                else -> it.replace("_", " ").titleCase()
+            }
+            meta.add(statusStr)
+        }
+        dto.totalEps?.let { meta.add("Episodes: $it") }
+        dto.duration?.let { meta.add("Duration: $it min") }
+        dto.season?.let { season ->
+            val year = dto.year
+            meta.add(if (year != null) "${season.titleCase()} $year" else season.titleCase())
+        }
+        dto.country?.let { meta.add("Country: $it") }
+        if (meta.isNotEmpty()) {
+            desc.append("\n\n").append(meta.joinToString(" | "))
+        }
+
+        val dates = mutableListOf<String>()
+        dto.startDate?.let { dates.add("Start: $it") }
+        dto.endDate?.let { dates.add("End: $it") }
+        if (dates.isNotEmpty()) {
+            desc.append("\n\n").append(dates.joinToString(" | "))
+        }
+
+        dto.averageScore?.let { score ->
+            desc.append("\n\nScore: $score/100")
+            dto.meanScore?.takeIf { it != score }?.let { mean ->
+                desc.append(" (Mean: $mean/100)")
+            }
+        }
+
+        val stats = mutableListOf<String>()
+        dto.popularity?.let { stats.add("Popularity: $it") }
+        dto.favourites?.let { stats.add("Favourites: $it") }
+        dto.trending?.let { if (it > 0) stats.add("Trending: $it") }
+        if (stats.isNotEmpty()) {
+            desc.append("\n").append(stats.joinToString(" | "))
+        }
+
+        dto.studios?.takeIf { it.isNotEmpty() }?.let { studios ->
+            val mainStudio = studios.firstOrNull { it.isMain }?.name
+            val otherStudios = studios.filter { !it.isMain }.map { it.name }
+            desc.append("\n\nStudio: ")
+            if (mainStudio != null && otherStudios.isNotEmpty()) {
+                desc.append("$mainStudio (${otherStudios.joinToString(", ")})")
+            } else {
+                desc.append(studios.joinToString(", ") { it.name })
+            }
+        }
+
+        dto.synonyms?.takeIf { it.isNotEmpty() }?.let {
+            desc.append("\n\nSynonyms: ").append(it.joinToString(", "))
+        }
+
+        dto.hashtag?.takeIf { it.isNotBlank() }?.let {
+            desc.append("\nHashtag: $it")
+        }
+
+        val ids = mutableListOf<String>()
+        dto.anilistId?.let { ids.add("AniList: $it") }
+        dto.malId?.let { ids.add("MAL: $it") }
+        if (ids.isNotEmpty()) {
+            desc.append("\n\n").append(ids.joinToString(" | "))
+        }
+
+        dto.relations?.takeIf { it.isNotEmpty() }?.let { relations ->
+            desc.append("\n\nRelations:")
+            relations.forEach { rel ->
+                val relTitle = rel.title?.english ?: rel.title?.romaji ?: rel.title?.native ?: "Unknown"
+                val relType = rel.relationType?.replace("_", " ")?.titleCase() ?: ""
+                val relFormat = rel.format?.replace("_", " ")?.titleCase() ?: ""
+                val relSeasonYear = buildString {
+                    rel.season?.let { append(it.titleCase()) }
+                    rel.year?.let { y ->
+                        if (isNotEmpty()) append(" ")
+                        append(y)
+                    }
+                }
+                desc.append("\n• $relTitle ($relFormat${if (relSeasonYear.isNotBlank()) ", $relSeasonYear" else ""}) [$relType]")
+            }
+        }
+
+        dto.characters?.filter { it.role == "MAIN" }?.takeIf { it.isNotEmpty() }?.let { chars ->
+            desc.append("\n\nMain Characters:")
+            chars.forEach { char ->
+                val va = char.voiceActor?.let { "${it.name} (${it.language})" } ?: "Unknown"
+                desc.append("\n• ${char.name} (VA: $va)")
+            }
+        }
+
+        dto.staff?.takeIf { it.isNotEmpty() }?.let { staffList ->
+            val keyRoles = listOf("Director", "Original Creator", "Series Composition", "Character Design", "Music")
+            val keyStaff = staffList.filter { it.role in keyRoles }
+            if (keyStaff.isNotEmpty()) {
+                desc.append("\n\nStaff:")
+                keyStaff.forEach { s ->
+                    desc.append("\n• ${s.role}: ${s.name}")
+                }
+            }
+        }
+
+        dto.trailer?.takeIf { it.isNotBlank() && it != "-" }?.let {
+            desc.append("\n\nTrailer: https://www.youtube.com/watch?v=$it")
+        }
+
+        return desc.toString().trim()
+    }
+
+    private fun String.cleanHtml(): String = this
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<BR>", "\n")
+        .replace("<BR/>", "\n")
+        .replace("<i>", "")
+        .replace("</i>", "")
+        .replace("<b>", "")
+        .replace("</b>", "")
+        .replace("<em>", "")
+        .replace("</em>", "")
+        .trim()
+
+    private fun String.titleCase(): String = split(" ").joinToString(" ") { word ->
+        word.lowercase().replaceFirstChar { it.uppercase() }
     }
 
     private fun String.toDate(): Long = try {

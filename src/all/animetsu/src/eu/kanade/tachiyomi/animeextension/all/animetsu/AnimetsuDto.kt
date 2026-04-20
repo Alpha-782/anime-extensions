@@ -1,3 +1,4 @@
+// AnimetsuDto.kt
 package eu.kanade.tachiyomi.animeextension.all.animetsu
 
 import kotlinx.serialization.SerialName
@@ -17,7 +18,7 @@ data class AnimetsuAnimeDto(
     val type: String? = null,
     val title: AnimetsuTitleDto? = null,
     val status: String? = null,
-    val isAdult: Boolean = false,
+    @SerialName("is_adult") val isAdult: Boolean = false,
     @SerialName("cover_image") val coverImage: AnimetsuCoverDto? = null,
     val banner: String? = null,
     val description: String? = null,
@@ -33,6 +34,25 @@ data class AnimetsuAnimeDto(
     val trailer: String? = null,
     val season: String? = null,
     val episodes: List<AnimetsuEpisodeDto>? = null,
+    // Fields from /anime/info/ endpoint
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    @SerialName("mal_id") val malId: Int? = null,
+    val country: String? = null,
+    val source: String? = null,
+    val hashtag: String? = null,
+    @SerialName("mean_score") val meanScore: Int? = null,
+    val popularity: Int? = null,
+    val favourites: Int? = null,
+    val trending: Int? = null,
+    val synonyms: List<String>? = null,
+    val studios: List<AnimetsuStudioDto>? = null,
+    val relations: List<AnimetsuRelationDto>? = null,
+    val characters: List<AnimetsuCharacterDto>? = null,
+    val recommendations: List<AnimetsuRecommendationDto>? = null,
+    val staff: List<AnimetsuStaffDto>? = null,
+    val color: String? = null,
+    @SerialName("clear_logo") val clearLogo: String? = null,
+    val users: Int? = null,
 )
 
 @Serializable
@@ -40,6 +60,13 @@ data class AnimetsuTitleDto(
     val romaji: String? = null,
     val english: String? = null,
     val native: String? = null,
+)
+
+@Serializable
+data class AnimetsuRecentDto(
+    val results: List<AnimetsuAnimeDto>,
+    @SerialName("current_page") val currentPage: Int,
+    @SerialName("last_page") val lastPage: Int,
 )
 
 @Serializable
@@ -101,4 +128,67 @@ data class AnimetsuSkipsDto(
 data class AnimetsuSkipTimeDto(
     val start: Double,
     val end: Double,
+)
+
+@Serializable
+data class AnimetsuStudioDto(
+    val name: String,
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    @SerialName("is_main") val isMain: Boolean = false,
+)
+
+@Serializable
+data class AnimetsuRelationDto(
+    val id: String,
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    val title: AnimetsuTitleDto? = null,
+    val format: String? = null,
+    val season: String? = null,
+    val year: Int? = null,
+    @SerialName("relation_type") val relationType: String? = null,
+    @SerialName("total_eps") val totalEps: Int? = null,
+    val status: String? = null,
+)
+
+@Serializable
+data class AnimetsuCharacterDto(
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    val name: String? = null,
+    val image: String? = null,
+    val role: String? = null,
+    @SerialName("voice_actor") val voiceActor: AnimetsuVoiceActorDto? = null,
+)
+
+@Serializable
+data class AnimetsuVoiceActorDto(
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    val name: String? = null,
+    val image: String? = null,
+    val language: String? = null,
+)
+
+@Serializable
+data class AnimetsuRecommendationDto(
+    val id: String,
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    val title: AnimetsuTitleDto? = null,
+    val format: String? = null,
+    val season: String? = null,
+    val year: Int? = null,
+    @SerialName("total_eps") val totalEps: Int? = null,
+    val status: String? = null,
+    @SerialName("average_score") val averageScore: Int? = null,
+    val description: String? = null,
+    @SerialName("cover_image") val coverImage: AnimetsuCoverDto? = null,
+    val banner: String? = null,
+    val trailer: String? = null,
+)
+
+@Serializable
+data class AnimetsuStaffDto(
+    @SerialName("anilist_id") val anilistId: Int? = null,
+    val name: String? = null,
+    val image: String? = null,
+    val language: String? = null,
+    val role: String? = null,
 )

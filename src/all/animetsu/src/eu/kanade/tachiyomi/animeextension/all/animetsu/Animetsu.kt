@@ -36,15 +36,12 @@ class Animetsu :
 
     override val name = "Animetsu"
 
-    override val baseUrl = "https://animetsu.live"
-
+    override val baseUrl: String
+        get() = preferences.getString(PREF_DOMAIN_KEY, DOMAIN_VALUES.first()) ?: DOMAIN_VALUES.first()
     private val preferences: SharedPreferences by getPreferencesLazy()
 
-    private val domain: String
-        get() = preferences.getString(PREF_DOMAIN_KEY, baseUrl) ?: baseUrl
-
     private val apiUrl: String
-        get() = "$domain/v2/api"
+        get() = "$baseUrl/v2/api"
 
     private val proxyUrl = "https://mega-cloud.top/proxy"
 
@@ -67,7 +64,7 @@ class Animetsu :
     /** Extract the raw anime ID from SAnime.url – handles "/anime/{id}" and plain "{id}" */
     private fun extractAnimeId(url: String): String = url.substringAfterLast("/")
 
-    private fun apiHeaders(referer: String = "$domain/browse"): Headers = Headers.Builder()
+    private fun apiHeaders(referer: String = "$baseUrl/browse"): Headers = Headers.Builder()
         .add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0")
         .add("Accept", "application/json, text/plain, */*")
         .add("Accept-Language", "en-US,en;q=0.9")
@@ -138,7 +135,7 @@ class Animetsu :
         anime // Fallback: return existing anime populated from search
     }
 
-    override fun getAnimeUrl(anime: SAnime): String = "$domain/anime/${extractAnimeId(anime.url)}"
+    override fun getAnimeUrl(anime: SAnime): String = "$baseUrl/anime/${extractAnimeId(anime.url)}"
 
     override fun animeDetailsRequest(anime: SAnime): Request = GET("$apiUrl/anime/${extractAnimeId(anime.url)}", apiHeaders(getAnimeUrl(anime)))
 
@@ -159,7 +156,7 @@ class Animetsu :
      */
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> {
         val animeId = extractAnimeId(anime.url)
-        val referer = "$domain/anime/$animeId"
+        val referer = "$baseUrl/anime/$animeId"
 
         // Attempt 1: /anime/eps/{id} endpoint (original)
         try {
@@ -229,7 +226,7 @@ class Animetsu :
         }
     }.reversed()
 
-    override fun episodeListRequest(anime: SAnime): Request = GET("$apiUrl/anime/eps/${extractAnimeId(anime.url)}", apiHeaders("$domain/anime/${extractAnimeId(anime.url)}"))
+    override fun episodeListRequest(anime: SAnime): Request = GET("$apiUrl/anime/eps/${extractAnimeId(anime.url)}", apiHeaders("$baseUrl/anime/${extractAnimeId(anime.url)}"))
 
     override fun episodeListParse(response: Response): List<SEpisode> {
         val animeId = response.request.url.pathSegments.last()
@@ -255,7 +252,7 @@ class Animetsu :
         val parts = episode.url.split("/")
         val animeId = parts[0]
         val epNum = parts[1]
-        val watchReferer = "$domain/watch/$animeId"
+        val watchReferer = "$baseUrl/watch/$animeId"
         val sourceType = audioType
 
         val serverResponse = client.newCall(
@@ -295,7 +292,7 @@ class Animetsu :
                             val fullUrl = when {
                                 source.needProxy -> "$proxyUrl${source.url}"
                                 source.url.startsWith("http") -> source.url
-                                else -> "$domain${source.url}"
+                                else -> "$baseUrl${source.url}"
                             }
 
                             when {
@@ -315,7 +312,7 @@ class Animetsu :
                                         playlistUtils.extractFromHls(
                                             playlistUrl = fullUrl,
                                             videoNameGen = { quality -> "${server.id.uppercase()}: $quality ($audioLabel)" },
-                                            referer = "$domain/",
+                                            referer = "$baseUrl/",
                                             subtitleList = subtitleTracks,
                                         ),
                                     )

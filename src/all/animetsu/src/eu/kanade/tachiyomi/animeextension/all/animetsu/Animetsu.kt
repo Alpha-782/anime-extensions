@@ -17,17 +17,12 @@ import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.addSwitchPreference
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.parallelCatchingFlatMapBlocking
 import keiyoushi.utils.parseAs
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 class Animetsu :
@@ -36,9 +31,10 @@ class Animetsu :
 
     override val name = "Animetsu"
 
+    private val preferences: SharedPreferences by getPreferencesLazy()
+
     override val baseUrl: String
         get() = preferences.getString(PREF_DOMAIN_KEY, DOMAIN_VALUES.first()) ?: DOMAIN_VALUES.first()
-    private val preferences: SharedPreferences by getPreferencesLazy()
 
     private val apiUrl: String
         get() = "$baseUrl/v2/api"
@@ -60,9 +56,6 @@ class Animetsu :
 
     private val audioType: String
         get() = preferences.getString(PREF_AUDIO_TYPE_KEY, PREF_AUDIO_TYPE_DEFAULT) ?: PREF_AUDIO_TYPE_DEFAULT
-
-    /** Extract the raw anime ID from SAnime.url – handles "/anime/{id}" and plain "{id}" */
-    private fun extractAnimeId(url: String): String = url.substringAfterLast("/")
 
     private fun apiHeaders(referer: String = "$baseUrl/browse"): Headers = Headers.Builder()
         .add("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
@@ -129,123 +122,53 @@ class Animetsu :
 
     // =========================== Anime Details ============================
 
-    override suspend fun getAnimeDetails(anime: SAnime): SAnime = try {
-        val response = client.newCall(animeDetailsRequest(anime)).awaitSuccess()
-        animeDetailsParse(response)
-    } catch (_: Exception) {
-        anime
-    }
+    override fun getAnimeUrl(anime: SAnime): String = "$baseUrl/anime/${anime.url}"
 
-    override fun getAnimeUrl(anime: SAnime): String = "$baseUrl/anime/${extractAnimeId(anime.url)}"
+    override fun animeDetailsRequest(anime: SAnime): Request = GET("$apiUrl/anime/info/${anime.url}", apiHeaders(getAnimeUrl(anime)))
 
-    override fun animeDetailsRequest(anime: SAnime): Request = GET("$apiUrl/anime/info/${extractAnimeId(anime.url)}", apiHeaders(getAnimeUrl(anime)))
+    override fun animeDetailsParse(response: Response): SAnime = response.parseAs<AnimetsuAnimeDto>().toSAnime()
 
-    override fun animeDetailsParse(response: Response): SAnime = try {
-        response.parseAs<AnimetsuAnimeDto>().toSAnime()
-    } catch (e: Exception) {
-        SAnime.create().apply {
-            url = "/anime/${response.request.url.pathSegments.last()}"
-        }
+    // ============================== Related ===============================
+
+    override fun relatedAnimeListParse(response: Response): List<SAnime> {
+        val dto = response.parseAs<AnimetsuAnimeDto>()
+        return dto.relations?.mapNotNull { rel ->
+            if (rel.id.isBlank()) return@mapNotNull null
+            val relTitle = when (titleLanguage) {
+                "english" -> rel.title?.english
+                "native" -> rel.title?.native
+                else -> rel.title?.romaji
+            }?.takeIf { it.isNotBlank() }
+                ?: rel.title?.romaji
+                ?: rel.title?.english
+                ?: return@mapNotNull null
+
+            SAnime.create().apply {
+                url = rel.id
+                title = relTitle
+                status = parseStatus(rel.status)
+            }
+        } ?: emptyList()
     }
 
     // ============================== Episodes ==============================
 
     override suspend fun getEpisodeList(anime: SAnime): List<SEpisode> {
-        val animeId = extractAnimeId(anime.url)
-        val referer = "$baseUrl/anime/$animeId"
+        val animeId = anime.url
+        val referer = getAnimeUrl(anime)
 
-        // Attempt 1: /anime/eps/{id} endpoint (original)
-        try {
-            val response = client.newCall(
-                GET("$apiUrl/anime/eps/$animeId", apiHeaders(referer)),
-            ).awaitSuccess()
-            val dtos = response.parseAs<List<AnimetsuEpisodeDto>>()
-            if (dtos.isNotEmpty()) {
-                return dtos.mapNotNull { dto ->
-                    val epNum = dto.epNum ?: return@mapNotNull null
-                    SEpisode.create().apply {
-                        url = "$animeId/$epNum"
-                        name = buildString {
-                            append("Ep. $epNum")
-                            if (!dto.name.isNullOrBlank()) append(" - ${dto.name}")
-                            if (dto.isFiller == true) append(" (Filler)")
-                        }
-                        episode_number = epNum.toFloat()
-                        date_upload = dto.airedAt?.toDate() ?: 0L
-                    }
-                }.sortedByDescending { it.episode_number }
-            }
-        } catch (_: Exception) { }
+        val response = client.newCall(
+            GET("$apiUrl/anime/eps/$animeId", apiHeaders(referer)),
+        ).awaitSuccess()
 
-        // Attempt 2: /anime/{id} details endpoint (may have episodes embedded)
-        try {
-            val response = client.newCall(
-                GET("$apiUrl/anime/$animeId", apiHeaders(referer)),
-            ).awaitSuccess()
-            val dto = response.parseAs<AnimetsuAnimeDto>()
-            if (!dto.episodes.isNullOrEmpty()) {
-                return dto.episodes.mapNotNull { ep ->
-                    val epNum = ep.epNum ?: return@mapNotNull null
-                    SEpisode.create().apply {
-                        url = "$animeId/$epNum"
-                        name = buildString {
-                            append("Ep. $epNum")
-                            if (!ep.name.isNullOrBlank()) append(" - ${ep.name}")
-                            if (ep.isFiller == true) append(" (Filler)")
-                        }
-                        episode_number = epNum.toFloat()
-                        date_upload = ep.airedAt?.toDate() ?: 0L
-                    }
-                }.sortedByDescending { it.episode_number }
-            }
-            val totalEps = dto.totalEps
-            if (totalEps != null && totalEps > 0) {
-                return generateEpisodes(animeId, totalEps)
-            }
-        } catch (_: Exception) { }
-
-        // Attempt 3: Fallback from totalEps found in description ("Episodes: 12")
-        val totalEps = anime.description
-            ?.substringAfter("Episodes: ", "")
-            ?.substringBefore("\n")
-            ?.substringBefore("|")
-            ?.trim()
-            ?.toIntOrNull()
-        if (totalEps != null && totalEps > 0) {
-            return generateEpisodes(animeId, totalEps)
-        }
-
-        return emptyList()
+        return response.parseAs<List<AnimetsuEpisodeDto>>()
+            .mapNotNull { it.toSEpisode(animeId) }
+            .sortedByDescending { it.episode_number }
     }
 
-    private fun generateEpisodes(animeId: String, totalEps: Int): List<SEpisode> = (1..totalEps).map { epNum ->
-        SEpisode.create().apply {
-            url = "$animeId/$epNum"
-            name = "Ep. $epNum"
-            episode_number = epNum.toFloat()
-        }
-    }.reversed()
+    override fun episodeListRequest(anime: SAnime): Request = throw UnsupportedOperationException()
 
-    override fun episodeListRequest(anime: SAnime): Request = GET("$apiUrl/anime/eps/${extractAnimeId(anime.url)}", apiHeaders("$baseUrl/anime/${extractAnimeId(anime.url)}"))
-
-    override fun episodeListParse(response: Response): List<SEpisode> {
-        val animeId = response.request.url.pathSegments.last()
-        val dtos = response.parseAs<List<AnimetsuEpisodeDto>>()
-
-        return dtos.mapNotNull { dto ->
-            val epNum = dto.epNum ?: return@mapNotNull null
-            SEpisode.create().apply {
-                url = "$animeId/$epNum"
-                name = buildString {
-                    append("Ep. $epNum")
-                    if (!dto.name.isNullOrBlank()) append(" - ${dto.name}")
-                    if (dto.isFiller == true) append(" (Filler)")
-                }
-                episode_number = epNum.toFloat()
-                date_upload = dto.airedAt?.toDate() ?: 0L
-            }
-        }.sortedByDescending { it.episode_number }
-    }
+    override fun episodeListParse(response: Response): List<SEpisode> = throw UnsupportedOperationException()
 
     // ============================ Video Links =============================
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
@@ -261,96 +184,79 @@ class Animetsu :
 
         val allServers = serverResponse.parseAs<List<AnimetsuServerDto>>()
 
-        val servers = if (preferredServer != PREF_SERVER_DEFAULT) {
-            allServers.filter { it.id == preferredServer }
-                .takeIf { it.isNotEmpty() }
-                ?: allServers
-        } else {
-            allServers
-        }
+        val servers = allServers.filter { preferredServer == PREF_SERVER_DEFAULT || preferredServer == it.id }
 
         val playlistUtils = PlaylistUtils(client, apiHeaders(watchReferer))
         val audioLabel = sourceType.uppercase()
 
-        return coroutineScope {
-            servers.map { server ->
-                async {
-                    try {
-                        val sourceResponse = client.newCall(
-                            GET("$apiUrl/anime/oppai/$animeId/$epNum?server=${server.id}&source_type=$sourceType", apiHeaders(watchReferer)),
-                        ).awaitSuccess()
+        return servers.parallelCatchingFlatMapBlocking { server ->
+            val sourceResponse = client.newCall(
+                GET("$apiUrl/anime/oppai/$animeId/$epNum?server=${server.id}&source_type=$sourceType", apiHeaders(watchReferer)),
+            ).execute()
 
-                        val dto = sourceResponse.parseAs<AnimetsuVideoDto>()
-                        val subtitleTracks = dto.subs?.map { sub ->
-                            Track(sub.url, sub.lang ?: "Unknown")
-                        } ?: emptyList()
+            val dto = sourceResponse.parseAs<AnimetsuVideoDto>()
+            val subtitleTracks = dto.subs?.map { sub ->
+                Track(sub.url, sub.lang ?: "Unknown")
+            } ?: emptyList()
 
-                        val serverVideos = mutableListOf<Video>()
-                        val subLabel = when {
-                            server.id.equals("pahe", ignoreCase = true) -> " [Hard Subs]"
-                            server.id.equals("kite", ignoreCase = true) -> " [Soft Subs]"
-                            server.id.equals("zoro", ignoreCase = true) -> " [Soft Subs]"
-                            server.id.equals("meg", ignoreCase = true) -> " [Hard Subs]"
-                            else -> ""
+            val serverVideos = mutableListOf<Video>()
+            val subLabel = when {
+                server.id.equals("pahe", ignoreCase = true) -> " [Hard Subs]"
+                server.id.equals("kite", ignoreCase = true) -> " [Soft Subs]"
+                server.id.equals("zoro", ignoreCase = true) -> " [Soft Subs]"
+                server.id.equals("meg", ignoreCase = true) -> " [Hard Subs]"
+                else -> ""
+            }
+
+            for (source in dto.sources) {
+                val fullUrl = when {
+                    source.needProxy -> "$proxyUrl${source.url}"
+                    source.url.startsWith("http") -> source.url
+                    else -> "$baseUrl${source.url}"
+                }
+
+                when {
+                    source.type?.contains("mp4") == true -> {
+                        serverVideos.add(
+                            Video(
+                                fullUrl,
+                                "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
+                                fullUrl,
+                                apiHeaders(watchReferer),
+                                subtitleTracks,
+                            ),
+                        )
+                    }
+                    source.type?.contains("mpegurl") == true -> {
+                        if (source.oldHls) {
+                            serverVideos.add(
+                                Video(
+                                    fullUrl,
+                                    "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
+                                    fullUrl,
+                                    apiHeaders(watchReferer),
+                                    subtitleTracks,
+                                ),
+                            )
+                        } else {
+                            serverVideos.addAll(
+                                playlistUtils.extractFromHls(
+                                    playlistUrl = fullUrl,
+                                    videoNameGen = { quality ->
+                                        val cleanQuality = quality.substringBefore(" ").let { q ->
+                                            if (q.endsWith("P")) q.lowercase() else q
+                                        }
+                                        "${server.id.uppercase()}: $cleanQuality ($audioLabel)$subLabel"
+                                    },
+                                    referer = "$baseUrl/",
+                                    subtitleList = subtitleTracks,
+                                ),
+                            )
                         }
-
-                        for (source in dto.sources) {
-                            val fullUrl = when {
-                                source.needProxy -> "$proxyUrl${source.url}"
-                                source.url.startsWith("http") -> source.url
-                                else -> "$baseUrl${source.url}"
-                            }
-
-                            when {
-                                source.type?.contains("mp4") == true -> {
-                                    serverVideos.add(
-                                        Video(
-                                            fullUrl,
-                                            "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
-                                            fullUrl,
-                                            apiHeaders(watchReferer),
-                                            subtitleTracks,
-                                        ),
-                                    )
-                                }
-                                source.type?.contains("mpegurl") == true -> {
-                                    // Old HLS streams provide direct media playlists per quality rather than a master playlist.
-                                    // We construct the Video object directly to utilize the explicit quality from the API.
-                                    if (source.oldHls) {
-                                        serverVideos.add(
-                                            Video(
-                                                fullUrl,
-                                                "${server.id.uppercase()}: ${source.quality} ($audioLabel)$subLabel",
-                                                fullUrl,
-                                                apiHeaders(watchReferer),
-                                                subtitleTracks,
-                                            ),
-                                        )
-                                    } else {
-                                        serverVideos.addAll(
-                                            playlistUtils.extractFromHls(
-                                                playlistUrl = fullUrl,
-                                                videoNameGen = { quality ->
-                                                    // Format "1080P (1920X1080) - 2.15MB/s" into "1080p" for more consistent quality options
-                                                    val cleanQuality = quality.substringBefore(" ").let { q ->
-                                                        if (q.endsWith("P")) q.lowercase() else q
-                                                    }
-                                                    "${server.id.uppercase()}: $cleanQuality ($audioLabel)$subLabel"
-                                                },
-                                                referer = "$baseUrl/",
-                                                subtitleList = subtitleTracks,
-                                            ),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        serverVideos
-                    } catch (_: Exception) {
-                        emptyList<Video>()
                     }
                 }
-            }.awaitAll().flatten()
+            }
+            serverVideos
         }
     }
 
@@ -414,7 +320,7 @@ class Animetsu :
 
     private fun AnimetsuAnimeDto.toSAnime() = SAnime.create().apply {
         val dto = this@toSAnime
-        url = "/anime/${dto.id}"
+        url = dto.id
         title = when (titleLanguage) {
             "english" -> dto.title?.english
             "native" -> dto.title?.native
@@ -425,10 +331,7 @@ class Animetsu :
             ?: "Unknown Title"
 
         thumbnail_url = dto.coverImage?.large ?: dto.coverImage?.medium
-        genre = buildList {
-            dto.genres?.let { addAll(it) }
-            dto.tags?.let { addAll(it) }
-        }.joinToString(", ")
+        genre = (dto.genres.orEmpty() + dto.tags.orEmpty()).joinToString(", ")
         status = parseStatus(dto.status)
         description = buildDescription(dto)
         artist = dto.staff?.firstOrNull { it.role == "Character Design" }?.name ?: ""
@@ -575,15 +478,6 @@ class Animetsu :
 
     private fun String.titleCase(): String = split(" ").joinToString(" ") { word ->
         word.lowercase().replaceFirstChar { it.uppercase() }
-    }
-
-    private fun String.toDate(): Long = try {
-        val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-        format.parse(this)?.time ?: 0L
-    } catch (_: Exception) {
-        0L
     }
 
     companion object {

@@ -1,7 +1,12 @@
 package eu.kanade.tachiyomi.animeextension.all.animetsu
 
+import eu.kanade.tachiyomi.animesource.model.SEpisode
+import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 @Serializable
 data class AnimetsuSearchDto(
@@ -33,7 +38,6 @@ data class AnimetsuAnimeDto(
     val trailer: String? = null,
     val season: String? = null,
     val episodes: List<AnimetsuEpisodeDto>? = null,
-    // Fields from /anime/info/ endpoint
     @SerialName("anilist_id") val anilistId: Int? = null,
     @SerialName("mal_id") val malId: Int? = null,
     val country: String? = null,
@@ -83,7 +87,27 @@ data class AnimetsuEpisodeDto(
     @SerialName("is_filler") val isFiller: Boolean? = null,
     val name: String? = null,
     val id: String = "",
-)
+) {
+    fun toSEpisode(animeId: String): SEpisode? {
+        val epNum = this.epNum ?: return null
+        val dtoName = this.name
+        val dtoFiller = this.isFiller
+        val dtoAiredAt = this.airedAt
+
+        return SEpisode.create().apply {
+            url = "$animeId/$epNum"
+            name = buildString {
+                append("Ep. $epNum")
+                if (!dtoName.isNullOrBlank()) append(" - $dtoName")
+                if (dtoFiller == true) append(" (Filler)")
+            }
+            episode_number = epNum.toFloat()
+            date_upload = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.tryParse(dtoAiredAt)
+        }
+    }
+}
 
 @Serializable
 data class AnimetsuServerDto(

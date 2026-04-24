@@ -44,6 +44,15 @@ class AnimePahe :
         .addInterceptor(interceptor)
         .build()
 
+    private val appContext: android.app.Application by lazy {
+        val activityThread = Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentActivityThread")
+            .invoke(null)
+        activityThread.javaClass
+            .getDeclaredMethod("getApplication")
+            .invoke(activityThread) as android.app.Application
+    }
+
     override val name = "AnimePahe"
 
     override val baseUrl by lazy {
@@ -327,10 +336,12 @@ class AnimePahe :
     }
 
     private suspend fun getVideo(paheUrl: String, kwikUrl: String, quality: String): Video {
+        val extractor = KwikExtractor(client, headers, appContext)
+
         val videoUrl = if (preferences.getBoolean(PREF_LINK_TYPE_KEY, PREF_LINK_TYPE_DEFAULT)) {
-            KwikExtractor(client).getHlsStreamUrl(kwikUrl, referer = "$baseUrl/")
+            extractor.getHlsStreamUrl(kwikUrl, referer = "$baseUrl/")
         } else {
-            KwikExtractor(client).getStreamUrlFromKwik(paheUrl)
+            extractor.getStreamUrlFromKwik(paheUrl)
         }
 
         return Video(
@@ -464,9 +475,9 @@ class AnimePahe :
         private val PREF_SUB_ENTRIES = listOf("sub", "dub")
         private val PREF_SUB_VALUES = listOf("jpn", "eng")
 
-        private const val PREF_LINK_TYPE_KEY = "preferred_link_type_" // Temporary renamed to use HLS
+        private const val PREF_LINK_TYPE_KEY = "preferred_link_type"
         private const val PREF_LINK_TYPE_TITLE = "Use HLS links"
-        private const val PREF_LINK_TYPE_DEFAULT = true // Temporary set to `true` to use HLS
+        private const val PREF_LINK_TYPE_DEFAULT = true
         private val PREF_LINK_TYPE_SUMMARY by lazy {
             """Enable this if you are having Cloudflare issues.""".trimMargin()
         }

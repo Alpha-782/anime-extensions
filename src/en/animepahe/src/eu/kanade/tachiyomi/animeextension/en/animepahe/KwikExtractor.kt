@@ -1,33 +1,7 @@
-/* The following file is slightly modified and taken from: https://github.com/LagradOst/CloudStream-3/blob/4d6050219083d675ba9c7088b59a9492fcaa32c7/app/src/main/java/com/lagradost/cloudstream3/animeproviders/AnimePaheProvider.kt
- * It is published under the following license:
- *
-MIT License
-
-Copyright (c) 2021 Osten
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
- *
- */
-
 package eu.kanade.tachiyomi.animeextension.en.animepahe
 
-import aniyomi.lib.jsunpacker.JsUnpacker
+import android.app.Application
+import dev.datlag.jsunpacker.JsUnpacker
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.await
@@ -35,14 +9,27 @@ import keiyoushi.utils.useAsJsoup
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
-class KwikExtractor(private val client: OkHttpClient) {
+class KwikExtractor(
+    private val client: OkHttpClient,
+    headers: Headers,
+    private val context: Application? = null,
+) {
     private val kwikParamsRegex = Regex("""\("(\w+)",\d+,"(\w+)",(\d+),(\d+),\d+\)""")
     private val kwikDUrl = Regex("action=\"([^\"]+)\"")
     private val kwikDToken = Regex("value=\"([^\"]+)\"")
 
+    private val kwikClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(client.connectTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(client.readTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+            .writeTimeout(client.writeTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+            .build()
+    }
+
     suspend fun getHlsStreamUrl(kwikUrl: String, referer: String): String {
-        val eContent = client.newCall(GET(kwikUrl, Headers.headersOf("referer", referer)))
+        val eContent = kwikClient.newCall(GET(kwikUrl, Headers.headersOf("referer", referer)))
             .await().useAsJsoup()
         val script = eContent.selectFirst("script:containsData(eval\\(function)")!!.data().substringAfterLast("eval(function(")
         val unpacked = JsUnpacker.unpackAndCombine("eval(function($script")!!
@@ -50,21 +37,20 @@ class KwikExtractor(private val client: OkHttpClient) {
     }
 
     suspend fun getStreamUrlFromKwik(paheUrl: String): String {
-        val noRedirectClient = client.newBuilder()
+        val noRedirectClient = kwikClient.newBuilder()
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
+
         val kwikUrl = "https://" + noRedirectClient.newCall(GET("$paheUrl/i")).await()
             .use { it.header("location")!!.substringAfterLast("https://") }
-        val (fContentCookies, fContentString, fContentUrl) =
-            client.newCall(GET(kwikUrl, Headers.headersOf("referer", "https://kwik.cx/"))).await()
-                .use { response ->
-                    Triple(
-                        response.headers("set-cookie").joinToString("; ") { it.substringBefore(";") },
-                        response.body.string(),
-                        response.request.url.toString(),
-                    )
-                }
+
+        var cfBypassResult: CfBypassResult? = null
+
+        var (fContentCookies, fContentString, fContentUrl) = fetchKwikHtml(kwikUrl)
+        if (cfBypassResult != null) {
+            fContentCookies = "$fContentCookies; ${cfBypassResult.cookies}"
+        }
 
         val (fullString, key, v1, v2) = kwikParamsRegex.find(fContentString)!!.destructured
         val decrypted = decrypt(fullString, key, v1.toInt(), v2.toInt())
@@ -74,29 +60,77 @@ class KwikExtractor(private val client: OkHttpClient) {
         var kwikLocation: String? = null
         var code = 419
         var tries = 0
+        //  Cookie grabber from Kwik URL to use MP4 videos
+        while (code != 302 && tries < 3) {
+            val postHeaders = if (cfBypassResult != null) {
+                Headers.headersOf(
+                    "referer",
+                    fContentUrl,
+                    "cookie",
+                    fContentCookies,
+                    "User-Agent",
+                    cfBypassResult.userAgent,
+                )
+            } else {
+                Headers.headersOf(
+                    "referer",
+                    fContentUrl,
+                    "cookie",
+                    fContentCookies,
+                )
+            }
 
-        while (code != 302 && tries < 20) {
             noRedirectClient.newCall(
-                POST(
-                    uri,
-                    Headers.headersOf(
-                        "referer",
-                        fContentUrl,
-                        "cookie",
-                        fContentCookies,
-                    ),
-                    FormBody.Builder().add("_token", tok).build(),
-                ),
+                POST(uri, postHeaders, FormBody.Builder().add("_token", tok).build()),
             ).await().use { content ->
                 code = content.code
                 kwikLocation = content.header("location")
             }
             ++tries
+
+            if ((code == 403 || code == 419) && cfBypassResult == null && context != null) {
+                cfBypassResult = CloudflareBypass(context).getCookies(kwikUrl)
+                fContentCookies = "$fContentCookies; ${cfBypassResult.cookies}"
+                tries = 0
+            }
         }
-        if (tries > 19) {
-            throw Exception("Failed to extract the stream uri from kwik.")
-        }
+
+        if (kwikLocation == null) throw Exception("Failed to extract the stream uri from kwik.")
         return kwikLocation!!
+    }
+
+    // This redirects to kwik URL to pass Cloudflare verification
+    private suspend fun fetchKwikHtml(kwikUrl: String): Triple<String, String, String> {
+        val response = kwikClient.newCall(GET(kwikUrl, Headers.headersOf("referer", "https://kwik.cx/"))).await()
+        val html = response.use { it.body.string() }
+        val baseCookies = response.headers("set-cookie").joinToString("; ") { it.substringBefore(";") }
+
+        if (html.contains("eval(function(")) {
+            return Triple(baseCookies, html, response.request.url.toString())
+        }
+
+        if (context != null) {
+            val cfResult = CloudflareBypass(context).getCookies(kwikUrl)
+
+            val bypassHeaders = Headers.headersOf(
+                "referer",
+                "https://kwik.cx/",
+                "cookie",
+                cfResult.cookies,
+                "User-Agent",
+                cfResult.userAgent,
+            )
+
+            val bypassResponse = kwikClient.newCall(GET(kwikUrl, bypassHeaders)).await()
+            val bypassHtml = bypassResponse.use { it.body.string() }
+            val bypassCookies = bypassResponse.headers("set-cookie").joinToString("; ") { it.substringBefore(";") }
+
+            if (bypassHtml.contains("eval(function(")) {
+                return Triple("$bypassCookies; ${cfResult.cookies}", bypassHtml, bypassResponse.request.url.toString())
+            }
+        }
+
+        throw Exception("Failed to fetch Kwik HTML. Blocked by Cloudflare.")
     }
 
     private fun decrypt(fullString: String, key: String, v1: Int, v2: Int): String {
@@ -114,7 +148,6 @@ class KwikExtractor(private val client: OkHttpClient) {
             }
 
             i = nextIndex + 1
-
             val decodedChar = (decodedCharStr.toInt(v2) - v1).toChar()
             sb.append(decodedChar)
         }

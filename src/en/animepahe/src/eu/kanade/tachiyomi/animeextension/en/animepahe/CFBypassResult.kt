@@ -69,7 +69,7 @@ class CloudflareBypass(private val context: Application) {
                 pollCount++
                 val cookies = CookieManager.getInstance().getCookie(url)
 
-                if (cookies != null && cookies.contains("cf_clearance=")) {
+                if (cookies != null && "(?:^|; )cf_clearance=".toRegex().containsMatchIn(cookies)) {
                     view.destroy()
                     continuation.resume(CfBypassResult(cookies, userAgent))
                 } else {

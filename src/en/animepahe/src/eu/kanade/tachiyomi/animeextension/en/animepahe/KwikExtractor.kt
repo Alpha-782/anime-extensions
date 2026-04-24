@@ -13,12 +13,20 @@ import java.util.concurrent.TimeUnit
 
 class KwikExtractor(
     private val client: OkHttpClient,
-    headers: Headers,
     private val context: Application? = null,
 ) {
     private val kwikParamsRegex = Regex("""\("(\w+)",\d+,"(\w+)",(\d+),(\d+),\d+\)""")
     private val kwikDUrl = Regex("action=\"([^\"]+)\"")
     private val kwikDToken = Regex("value=\"([^\"]+)\"")
+
+    private val cfClearanceRegex = Regex("(?:^|; )cf_clearance=")
+
+    private data class KwikHtmlResult(
+        val cookies: String,
+        val html: String,
+        val url: String,
+        val cfBypassResult: CfBypassResult? = null,
+    )
 
     private val kwikClient by lazy {
         OkHttpClient.Builder()
@@ -45,12 +53,11 @@ class KwikExtractor(
         val kwikUrl = "https://" + noRedirectClient.newCall(GET("$paheUrl/i")).await()
             .use { it.header("location")!!.substringAfterLast("https://") }
 
-        var cfBypassResult: CfBypassResult? = null
-
-        var (fContentCookies, fContentString, fContentUrl) = fetchKwikHtml(kwikUrl)
-        if (cfBypassResult != null) {
-            fContentCookies = "$fContentCookies; ${cfBypassResult.cookies}"
-        }
+        val kwikResult = fetchKwikHtml(kwikUrl)
+        var cfBypassResult = kwikResult.cfBypassResult
+        var fContentCookies = kwikResult.cookies
+        val fContentString = kwikResult.html
+        val fContentUrl = kwikResult.url
 
         val (fullString, key, v1, v2) = kwikParamsRegex.find(fContentString)!!.destructured
         val decrypted = decrypt(fullString, key, v1.toInt(), v2.toInt())
@@ -60,7 +67,6 @@ class KwikExtractor(
         var kwikLocation: String? = null
         var code = 419
         var tries = 0
-        //  Cookie grabber from Kwik URL to use MP4 videos
         while (code != 302 && tries < 3) {
             val postHeaders = if (cfBypassResult != null) {
                 Headers.headersOf(
@@ -88,7 +94,7 @@ class KwikExtractor(
             }
             ++tries
 
-            if ((code == 403 || code == 419) && cfBypassResult == null && context != null) {
+            if ((code == 403 || code == 419) && context != null) {
                 cfBypassResult = CloudflareBypass(context).getCookies(kwikUrl)
                 fContentCookies = "$fContentCookies; ${cfBypassResult.cookies}"
                 tries = 0
@@ -99,14 +105,13 @@ class KwikExtractor(
         return kwikLocation!!
     }
 
-    // This redirects to kwik URL to pass Cloudflare verification
-    private suspend fun fetchKwikHtml(kwikUrl: String): Triple<String, String, String> {
+    private suspend fun fetchKwikHtml(kwikUrl: String): KwikHtmlResult {
         val response = kwikClient.newCall(GET(kwikUrl, Headers.headersOf("referer", "https://kwik.cx/"))).await()
         val html = response.use { it.body.string() }
         val baseCookies = response.headers("set-cookie").joinToString("; ") { it.substringBefore(";") }
 
-        if (html.contains("eval(function(")) {
-            return Triple(baseCookies, html, response.request.url.toString())
+        if (html.contains("eval(function(") && !cfClearanceRegex.containsMatchIn(baseCookies)) {
+            return KwikHtmlResult(baseCookies, html, response.request.url.toString())
         }
 
         if (context != null) {
@@ -126,8 +131,15 @@ class KwikExtractor(
             val bypassCookies = bypassResponse.headers("set-cookie").joinToString("; ") { it.substringBefore(";") }
 
             if (bypassHtml.contains("eval(function(")) {
-                return Triple("$bypassCookies; ${cfResult.cookies}", bypassHtml, bypassResponse.request.url.toString())
+                return KwikHtmlResult(
+                    "$bypassCookies; ${cfResult.cookies}",
+                    bypassHtml,
+                    bypassResponse.request.url.toString(),
+                    cfResult,
+                )
             }
+        } else if (html.contains("eval(function(") && cfClearanceRegex.containsMatchIn(baseCookies)) {
+            return KwikHtmlResult(baseCookies, html, response.request.url.toString())
         }
 
         throw Exception("Failed to fetch Kwik HTML. Blocked by Cloudflare.")

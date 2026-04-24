@@ -336,7 +336,7 @@ class AnimePahe :
     }
 
     private suspend fun getVideo(paheUrl: String, kwikUrl: String, quality: String): Video {
-        val extractor = KwikExtractor(client, headers, appContext)
+        val extractor = KwikExtractor(client, context = appContext)
 
         val videoUrl = if (preferences.getBoolean(PREF_LINK_TYPE_KEY, PREF_LINK_TYPE_DEFAULT)) {
             extractor.getHlsStreamUrl(kwikUrl, referer = "$baseUrl/")

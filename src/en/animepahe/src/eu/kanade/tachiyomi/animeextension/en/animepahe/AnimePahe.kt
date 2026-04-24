@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.animeextension.en.animepahe
 
+import android.annotation.SuppressLint
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animeextension.en.animepahe.dto.EpisodeDto
 import eu.kanade.tachiyomi.animeextension.en.animepahe.dto.LatestAnimeDto
@@ -32,6 +33,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 /* API: https://gist.github.com/Ellivers/f7716b6b6895802058c367963f3a2c51 */
+@SuppressLint("PrivateApi")
 class AnimePahe :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
@@ -44,13 +46,23 @@ class AnimePahe :
         .addInterceptor(interceptor)
         .build()
 
-    private val appContext: android.app.Application by lazy {
-        val activityThread = Class.forName("android.app.ActivityThread")
-            .getDeclaredMethod("currentActivityThread")
-            .invoke(null)
-        activityThread.javaClass
-            .getDeclaredMethod("getApplication")
-            .invoke(activityThread) as android.app.Application
+    // Lazily resolve the Application context via reflection, but guard against failures.
+    // Returns null if the reflective APIs are unavailable or if the Application is not yet initialized.
+    private val appContext: android.app.Application? by lazy {
+        try {
+            val activityThreadClass = Class.forName("android.app.ActivityThread")
+            val currentActivityThreadMethod = activityThreadClass.getDeclaredMethod("currentActivityThread")
+            val activityThread = currentActivityThreadMethod.invoke(null)
+                ?: return@lazy null
+
+            val getApplicationMethod = activityThreadClass.getDeclaredMethod("getApplication")
+            val application = getApplicationMethod.invoke(activityThread)
+
+            application as? android.app.Application
+        } catch (_: Throwable) {
+            // Reflection can fail on some Android versions/ROMs; treat as "no app context"
+            null
+        }
     }
 
     override val name = "AnimePahe"

@@ -420,7 +420,7 @@ class AnimePahe :
      * AnimePahe does not provide permanent URLs to its animes,
      * so we need to fetch the anime session every time.
      */
-    private fun fetchSession(animeId: String?): String {
+    private fun fetchSession(animeId: String): String {
         val sessionId = client.newCall(GET("$baseUrl/a/$animeId")).execute().use {
             it.request.url.pathSegments.last()
         }

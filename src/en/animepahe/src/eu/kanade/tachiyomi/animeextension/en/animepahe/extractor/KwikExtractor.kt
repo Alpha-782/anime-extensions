@@ -116,8 +116,9 @@ class KwikExtractor(
                 cloudFlareBypassResult = CloudflareBypass(context).getCookies(kwikUrl)
                     ?: throw KwikException.CloudflareBlockedException("Cloudflare bypass failed to return result.")
 
+                // Reset tries after successful bypass
                 fContentCookies = "$fContentCookies; ${cloudFlareBypassResult.cookies}"
-                tries = 0 // Reset tries after successful bypass
+                tries = 0
             }
             tries++
         }

@@ -35,7 +35,6 @@ import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Response
-import java.util.concurrent.TimeUnit
 
 data class KwikContent(val cookies: String, val html: String, val finalUrl: String)
 
@@ -46,11 +45,12 @@ class KwikExtractor(
     private val kwikDUrl = Regex("action=\"([^\"]+)\"")
     private val kwikDToken = Regex("value=\"([^\"]+)\"")
 
-    private val kwikClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(client.connectTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
-            .readTimeout(client.readTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
-            .writeTimeout(client.writeTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+    // Clone the base client so interceptors, cookie jars, logging, etc. are preserved,
+    // and only override redirect behaviour.
+    private val noRedirectClient by lazy {
+        client.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
     }
 
@@ -58,16 +58,12 @@ class KwikExtractor(
         val eContent = client.newCall(GET(kwikUrl, Headers.headersOf("referer", referer)))
             .execute().asJsoup()
         val script = eContent.selectFirst("script:containsData(eval\\(function)")!!.data().substringAfterLast("eval(function(")
-        val unpacked = JsUnpacker.unpackAndCombine("eval(function($script")!!
+        val unpacked = JsUnpacker.unpackAndCombine("eval(function($script)")
+            ?: throw KwikException.ExtractionException("JsUnpacker failed to unpack Kwik script.")
         return unpacked.substringAfter("const source=\\'").substringBefore("\\';")
     }
 
     fun getStreamUrlFromKwik(context: Application, paheUrl: String): String {
-        val noRedirectClient = kwikClient.newBuilder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .build()
-
         val kwikUrl = noRedirectClient.newCall(GET("$paheUrl/i")).execute().use { response ->
             val location = response.header("location")
                 ?: throw KwikException.ExtractionException("Pahe redirect failed: No location header found.")
@@ -137,7 +133,8 @@ class KwikExtractor(
                 }
                 .build()
 
-            return kwikClient.newCall(GET(kwikUrl, headers)).execute().use { resp ->
+            // Use the base client directly so all interceptors are preserved.
+            return client.newCall(GET(kwikUrl, headers)).execute().use { resp ->
                 val html = resp.body.string()
                 if (html.contains("eval(function(")) {
                     val respCookies = resp.extractCookies()

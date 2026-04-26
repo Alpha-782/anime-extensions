@@ -131,23 +131,38 @@ class Animetsu :
 
     override fun relatedAnimeListParse(response: Response): List<SAnime> {
         val dto = response.parseAs<AnimetsuAnimeDto>()
-        return dto.relations?.mapNotNull { rel ->
-            if (rel.id.isBlank()) return@mapNotNull null
-            val relTitle = when (titleLanguage) {
-                "english" -> rel.title?.english
-                "native" -> rel.title?.native
-                else -> rel.title?.romaji
-            }?.takeIf { it.isNotBlank() }
-                ?: rel.title?.romaji
-                ?: rel.title?.english
-                ?: return@mapNotNull null
 
-            SAnime.create().apply {
-                url = rel.id
-                title = relTitle
-                status = parseStatus(rel.status)
-            }
-        } ?: emptyList()
+        fun getTitle(titleDto: AnimetsuTitleDto?): String? = when (titleLanguage) {
+            "english" -> titleDto?.english
+            "native" -> titleDto?.native
+            else -> titleDto?.romaji
+        }?.takeIf { it.isNotBlank() }
+            ?: titleDto?.romaji
+            ?: titleDto?.english
+
+        return buildList {
+            dto.relations?.mapNotNull { rel ->
+                if (rel.id.isBlank()) return@mapNotNull null
+                val relTitle = getTitle(rel.title) ?: return@mapNotNull null
+
+                SAnime.create().apply {
+                    url = rel.id
+                    title = relTitle
+                    status = parseStatus(rel.status)
+                }
+            }?.let { addAll(it) }
+
+            dto.recommendations?.mapNotNull { rec ->
+                if (rec.id.isBlank()) return@mapNotNull null
+                val recTitle = getTitle(rec.title) ?: return@mapNotNull null
+
+                SAnime.create().apply {
+                    url = rec.id
+                    title = recTitle
+                    status = parseStatus(rec.status)
+                }
+            }?.let { addAll(it) }
+        }
     }
 
     // ============================== Episodes ==============================
@@ -200,10 +215,10 @@ class Animetsu :
 
             val serverVideos = mutableListOf<Video>()
             val subLabel = when {
-                server.id.equals("pahe", ignoreCase = true) -> " [Hard Subs]"
-                server.id.equals("kite", ignoreCase = true) -> " [Soft Subs]"
-                server.id.equals("zoro", ignoreCase = true) -> " [Soft Subs]"
-                server.id.equals("meg", ignoreCase = true) -> " [Hard Subs]"
+                server.id.equals("pahe", ignoreCase = true) -> " [Hard Subs]" // AnimePahe proxy
+                server.id.equals("kite", ignoreCase = true) -> " [Soft Subs]" // Unknown proxy
+                server.id.equals("meg", ignoreCase = true) -> " [Hard Subs]" // Unknown proxy
+                server.id.equals("kiss", ignoreCase = true) -> " [Soft Subs]" // New addition since "zoro" went down; KickAssAnime proxy?
                 else -> ""
             }
 
@@ -334,10 +349,7 @@ class Animetsu :
         status = parseStatus(dto.status)
         description = buildDescription(dto)
         artist = dto.staff?.firstOrNull { it.role == "Character Design" }?.name ?: ""
-        author = dto.staff?.firstOrNull { it.role == "Original Creator" }?.name
-            ?: dto.studios?.firstOrNull { it.isMain }?.name
-            ?: dto.studios?.firstOrNull()?.name
-            ?: ""
+        author = dto.studios?.firstOrNull { it.isMain }?.name ?: ""
     }
 
     private fun buildDescription(dto: AnimetsuAnimeDto): String {
@@ -491,8 +503,8 @@ class Animetsu :
 
         private const val PREF_SERVER_KEY = "preferred_server"
         private const val PREF_SERVER_DEFAULT = "all"
-        private val PREF_SERVER_ENTRIES = listOf("All", "Pahe", "Kite", "Zoro", "Meg")
-        private val PREF_SERVER_VALUES = listOf("all", "pahe", "kite", "zoro", "meg")
+        private val PREF_SERVER_ENTRIES = listOf("All", "Pahe", "Kite", "Meg", "Kiss")
+        private val PREF_SERVER_VALUES = listOf("all", "pahe", "kite", "meg", "kiss")
 
         private const val PREF_AUDIO_TYPE_KEY = "preferred_audio_type"
         private const val PREF_AUDIO_TYPE_DEFAULT = "sub"

@@ -81,7 +81,7 @@ data class AnimetsuCoverDto(
 
 @Serializable
 data class AnimetsuEpisodeDto(
-    @SerialName("ep_num") val epNum: Int? = null,
+    @SerialName("ep_num") val epNum: Double? = null, // was Int?
     @SerialName("aired_at") val airedAt: String? = null,
     val desc: String? = null,
     @SerialName("is_filler") val isFiller: Boolean? = null,
@@ -90,14 +90,18 @@ data class AnimetsuEpisodeDto(
 ) {
     fun toSEpisode(animeId: String): SEpisode? {
         val epNum = this.epNum ?: return null
+        if (epNum <= 0.0) return null // That Time I Got Reincarnated as a Slime Season 3 has an Episode 0 that does not exist
         val dtoName = this.name
         val dtoFiller = this.isFiller
         val dtoAiredAt = this.airedAt
 
+        // Format: 17.5 → "17.5", 1.0 → "1"; e.g. That Time I Got Reincarnated as a Slime Season 3
+        val epNumStr = if (epNum % 1.0 == 0.0) epNum.toInt().toString() else epNum.toString()
+
         return SEpisode.create().apply {
             url = "$animeId/$epNum"
             name = buildString {
-                append("Ep. $epNum")
+                append("Ep. $epNumStr")
                 if (!dtoName.isNullOrBlank()) append(" - $dtoName")
                 if (dtoFiller == true) append(" (Filler)")
             }

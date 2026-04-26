@@ -123,7 +123,7 @@ class RapidShareExtractor(
                                 })();
                                 """.trimIndent(),
                             ) { result ->
-                                val extractedUrl = result?.replace("\\\"", "\"")?.trim('"')?.takeIf { it.isNotEmpty() }
+                                val extractedUrl = result?.replace("\\\"", "\"")?.trim('"')?.takeIf { it.isNotEmpty() && it != "null" }
 
                                 if (extractedUrl != null) {
                                     view.destroy()

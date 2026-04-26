@@ -1,7 +1,9 @@
 package eu.kanade.tachiyomi.animeextension.en.movhub
 
+import android.app.Application
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
+import aniyomi.lib.rapidshareextractor.RapidShareExtractor
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -25,14 +27,18 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Element
+import uy.kohesive.injekt.injectLazy
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.util.Locale
+import kotlin.getValue
 
 class MovHub :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
+
+    private val context: Application by injectLazy()
 
     override val name = "MovHub"
 
@@ -73,7 +79,7 @@ class MovHub :
     }
 
     private var rapidShareExtractor by LazyMutable {
-        RapidShareExtractor(client, docHeaders)
+        RapidShareExtractor(client, docHeaders, context)
     }
 
     // ============================== Popular ===============================
@@ -363,7 +369,7 @@ class MovHub :
             summary = "%s",
         ) {
             docHeaders = headersBuilder(it).build()
-            rapidShareExtractor = RapidShareExtractor(client, docHeaders)
+            rapidShareExtractor = RapidShareExtractor(client, docHeaders, context)
         }
 
         screen.addListPreference(

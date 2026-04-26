@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.animeextension.en.yflix
+package aniyomi.lib.rapidshareextractor
 
 import android.annotation.SuppressLint
 import android.app.Application
@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Headers
@@ -256,3 +257,34 @@ class RapidShareExtractor(
      */
     private fun subLangSelect(tracks: List<Track>, language: String): List<Track> = tracks.sortedByDescending { it.lang.contains(language, true) }
 }
+
+// ============================== RapidShare Responses ==============================
+
+@Serializable
+data class EncryptedRapidResponse(
+    val result: String,
+)
+
+@Serializable
+data class RapidDecryptResponse(
+    val status: Int,
+    val result: RapidShareResult,
+)
+
+@Serializable
+data class RapidShareResult(
+    val sources: List<RapidShareSource> = emptyList(),
+    val tracks: List<RapidShareTrack> = emptyList(),
+)
+
+@Serializable
+data class RapidShareSource(
+    val file: String,
+)
+
+@Serializable
+data class RapidShareTrack(
+    val file: String,
+    val label: String? = null,
+    val kind: String,
+)

@@ -81,7 +81,7 @@ class Animetsu :
 
     override var client by LazyMutable {
         network.client.newBuilder()
-            .rateLimitHost(baseUrl.toHttpUrl(), permits = rateLimit, period = 1, unit = TimeUnit.SECONDS)
+            .rateLimitHost(baseUrl.toHttpUrl(), permits = rateLimit, period = 1L, unit = TimeUnit.SECONDS)
             .build()
     }
 

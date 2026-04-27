@@ -32,6 +32,7 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.getValue
 import kotlin.time.Duration.Companion.seconds
+import java.util.concurrent.TimeUnit
 
 class OneTwoThreeCine :
     AnimeHttpSource(),
@@ -57,9 +58,9 @@ class OneTwoThreeCine :
 
     private val rateLimit = 5
 
-    override var client: OkHttpClient by LazyMutable {
+    override var client by LazyMutable {
         network.client.newBuilder()
-            .rateLimitHost(baseUrl.toHttpUrl(), permits = rateLimit, period = 1.seconds)
+            .rateLimitHost(baseUrl.toHttpUrl(), permits = rateLimit, period = 1L, unit = TimeUnit.SECONDS)
             .build()
     }
 
@@ -373,7 +374,7 @@ class OneTwoThreeCine :
             summary = "%s",
         ) {
             client = network.client.newBuilder()
-                .rateLimitHost(it.toHttpUrl(), permits = rateLimit, period = 1.seconds)
+                .rateLimitHost(baseUrl.toHttpUrl(), permits = rateLimit, period = 1L, unit = TimeUnit.SECONDS)
                 .build()
             docHeaders = headersBuilder().set("Referer", "$it/").build()
             rapidShareExtractor = RapidShareExtractor(client, docHeaders, context)

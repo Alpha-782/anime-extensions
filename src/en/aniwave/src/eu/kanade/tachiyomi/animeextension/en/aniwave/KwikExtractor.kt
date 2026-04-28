@@ -31,16 +31,17 @@ import dev.datlag.jsunpacker.JsUnpacker
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
 import keiyoushi.utils.useAsJsoup
+import okhttp3.Headers
 import okhttp3.OkHttpClient
 
-class KwikExtractor(private val client: OkHttpClient) {
+class KwikExtractor(private val client: OkHttpClient, private val headers: Headers) {
 
     companion object {
         private val M3U8_REGEX = Regex("""['"]([^'"]+\.m3u8[^'"]*)['"]""")
 
         // Kwik serves a Cloudflare JS challenge to non-desktop User-Agents
         private const val DESKTOP_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0"
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36"
     }
 
     /**
@@ -55,6 +56,7 @@ class KwikExtractor(private val client: OkHttpClient) {
      */
     suspend fun getHlsStreamUrl(kwikUrl: String, referer: String): String {
         val requestHeaders = headers.newBuilder()
+            .set("User-Agent", DESKTOP_USER_AGENT)
             .set("Referer", referer)
             .build()
 

@@ -68,7 +68,7 @@ class AniWave :
 
     private val json: Json by injectLazy()
     private val playlistUtils by lazy { PlaylistUtils(client, headers) }
-    private val kwikExtractor by lazy { KwikExtractor(client) }
+    private val kwikExtractor by lazy { KwikExtractor(client, headers) }
 
     // ============================== Popular ===============================
 

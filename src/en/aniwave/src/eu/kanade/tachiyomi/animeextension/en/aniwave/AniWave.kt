@@ -667,8 +667,8 @@ class AniWave :
     }
 
     companion object {
-        private val DOMAINS = arrayOf("animewave.to", "aniwave.id", "aniwave.best", "aniwave.ro")
-        private val BASE_URLS = DOMAINS.map { "https://$it" }.toTypedArray()
+        private val DOMAINS = arrayOf("animewave.to", "aniwave.id", "aniwave.best", "aniwave.ro") // aniwave.cz also works but some minor changes in how it loads anime details
+        private val BASE_URLS = DOMAINS.map { "https://$it" }.toTypedArray() // These domains were provided by: https://megaplay.buzz/domains. Base64 encoded response.
 
         private const val PREF_DOMAIN_KEY = "preferred_domain"
         private val PREF_DOMAIN_DEFAULT = BASE_URLS[0]

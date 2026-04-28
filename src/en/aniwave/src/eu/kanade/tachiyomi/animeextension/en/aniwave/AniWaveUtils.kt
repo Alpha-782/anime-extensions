@@ -1,11 +1,11 @@
-package eu.kanade.tachiyomi.animeextension.en.aniwavese
+package eu.kanade.tachiyomi.animeextension.en.aniwave
 
 import android.util.Base64
 import java.net.URLDecoder
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
-class AniwaveSeUtils {
+class AniWaveUtils {
 
     fun vrfEncrypt(input: String): String {
         var vrf = input

@@ -144,8 +144,14 @@ class AniWave :
         val anime = SAnime.create()
         val newDocument = resolveSearchAnime(document)
         val titleElement = newDocument.selectFirst("h1.title, h2.title")
+        val animeId = newDocument.selectFirst("[data-id]")?.attr("data-id")
+            ?: newDocument.selectFirst("[data-tip]")?.attr("data-tip")
 
         anime.apply {
+            setUrlWithoutDomain(newDocument.location())
+            if (!animeId.isNullOrBlank()) {
+                url += "#$animeId"
+            }
             title = titleElement?.let { getTitle(it) }.orEmpty()
             genre = newDocument.select("div:contains(Genres) > span > a").joinToString(", ") { it.text().trim() }
             author = newDocument.select("div:contains(Studios) > span > a").joinToString(", ") { it.text().trim() }
@@ -235,12 +241,23 @@ class AniWave :
 
     // ============================== Related ===============================
 
-    override fun relatedAnimeListRequest(anime: SAnime): Request = GET(baseUrl + anime.url, refererHeaders)
+    override fun relatedAnimeListRequest(anime: SAnime): Request {
+        val animeUrl = anime.url.substringBefore("#")
+        val animeId = anime.url.substringAfter("#", "")
+        val request = GET(baseUrl + animeUrl, refererHeaders)
+        return if (animeId.isNotBlank()) {
+            request.newBuilder().header("X-Anime-Id", animeId).build()
+        } else {
+            request
+        }
+    }
 
     override fun relatedAnimeListParse(response: Response): List<SAnime> {
         val document = response.asJsoup()
         val currentAnimePath = response.request.url.encodedPath
-        val animeId = document.selectFirst("[data-id]")?.attr("data-id") ?: document.selectFirst("[data-tip]")?.attr("data-tip")
+        val animeId = response.request.header("X-Anime-Id")
+            ?: document.selectFirst("[data-id]")?.attr("data-id")
+            ?: document.selectFirst("[data-tip]")?.attr("data-tip")
         val resultList = mutableListOf<SAnime>()
 
         if (!animeId.isNullOrBlank()) {
@@ -289,18 +306,24 @@ class AniWave :
     // ============================== Episodes ==============================
 
     override fun episodeListRequest(anime: SAnime): Request {
-        client.newCall(GET(baseUrl + anime.url)).execute().use { response ->
-            var document = response.asJsoup()
-            document = resolveSearchAnime(document)
-            val id = document.selectFirst("[data-id]")?.attr("data-id") ?: document.selectFirst("[data-tip]")?.attr("data-tip")
-                ?: throw IllegalStateException("Anime ID not found on detail page")
-            val listHeaders = headers.newBuilder().apply {
-                add("Accept", "application/json, text/javascript, */*; q=0.01")
-                add("Referer", baseUrl + anime.url)
-                add("X-Requested-With", "XMLHttpRequest")
-            }.build()
-            return GET("$baseUrl/ajax/episode/list/$id?vrf=${utils.vrfEncrypt(id)}", listHeaders)
+        val animeId = anime.url.substringAfter("#", "")
+        val animeUrl = anime.url.substringBefore("#")
+
+        val id = animeId.ifBlank {
+            client.newCall(GET(baseUrl + animeUrl)).execute().use { response ->
+                var document = response.asJsoup()
+                document = resolveSearchAnime(document)
+                document.selectFirst("[data-id]")?.attr("data-id") ?: document.selectFirst("[data-tip]")?.attr("data-tip")
+                    ?: throw IllegalStateException("Anime ID not found on detail page")
+            }
         }
+
+        val listHeaders = headers.newBuilder().apply {
+            add("Accept", "application/json, text/javascript, */*; q=0.01")
+            add("Referer", baseUrl + animeUrl)
+            add("X-Requested-With", "XMLHttpRequest")
+        }.build()
+        return GET("$baseUrl/ajax/episode/list/$id?vrf=${utils.vrfEncrypt(id)}", listHeaders)
     }
 
     override fun episodeListSelector() = "div.episodes ul > li > a"

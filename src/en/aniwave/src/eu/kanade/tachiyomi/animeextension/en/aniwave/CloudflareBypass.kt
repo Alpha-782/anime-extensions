@@ -18,39 +18,32 @@ data class CloudFlareBypassResult(
 class CloudflareBypass(private val context: Context) {
 
     @SuppressLint("SetJavaScriptEnabled")
-    fun getCookies(pageUrl: String, referer: String = ""): CloudFlareBypassResult? {
-
+    fun getCookies(pageUrl: String): CloudFlareBypassResult? {
         val latch = CountDownLatch(1)
         var result: CloudFlareBypassResult? = null
         var webView: WebView? = null
 
+        // We MUST jump to the Main Thread because WebView is UI-bound
         Handler(Looper.getMainLooper()).post {
             webView = WebView(context)
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
-
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
-
             val defaultUserAgent = webView.settings.userAgentString
 
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, loadedUrl: String) {
                     pollForClearance(pageUrl, defaultUserAgent) { bypassResult ->
                         result = bypassResult
-                        latch.countDown()
+                        latch.countDown() // Release the background thread
                     }
                 }
             }
 
             CookieManager.getInstance().setCookie(pageUrl, "")
-
-            val extraHeaders = mutableMapOf<String, String>()
-            if (referer.isNotBlank()) {
-                extraHeaders["Referer"] = referer
-            }
-            webView.loadUrl(pageUrl, extraHeaders)
+            webView.loadUrl(pageUrl)
         }
 
+        // Wait here for up to 30 seconds
         try {
             latch.await(30, TimeUnit.SECONDS)
         } finally {

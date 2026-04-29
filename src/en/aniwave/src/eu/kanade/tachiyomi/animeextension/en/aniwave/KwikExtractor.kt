@@ -250,7 +250,7 @@ class KwikExtractor(
             }
 
             val result = appContext?.let { ctx ->
-                CloudflareBypass(ctx).getCookies(url, referer)
+                CloudflareBypass(ctx).getCookies(url)
             }
 
             if (result != null) {

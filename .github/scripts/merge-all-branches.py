@@ -43,8 +43,8 @@ for branch in branches:
     print(f"===================================")
     print(f"Merging origin/{branch}...")
 
-    # Attempt to merge. If it fails, exit with an error.
-    result = subprocess.run(f"git merge origin/{branch} --no-edit", shell=True, text=True, capture_output=True)
+        # Attempt to merge. If it fails, exit with an error.
+        result = subprocess.run(f"git merge origin/{branch} --no-edit --allow-unrelated-histories", shell=True, text=True, capture_output=True)
 
     if result.returncode != 0:
         print(result.stdout)

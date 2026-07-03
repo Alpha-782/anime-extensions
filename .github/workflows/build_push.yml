@@ -1,15 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main-actions
-    paths:
-      - '**'
-      - '!**.md'
-      - '!.github/**'
-      - '.github/scripts/**'
-      - '.github/workflows/build_push.yml'
   workflow_dispatch:
 
 permissions: {}

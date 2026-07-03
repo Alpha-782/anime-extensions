@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches:
-      - master
       - main-actions
     paths:
       - '**'
@@ -81,6 +80,7 @@ jobs:
       - id: generate-matrices
         name: Create output matrices
         run: |
+          # NOTE: Set to Debug so it builds without signing keys. Change to Release once keys are added.
           python ./.github/scripts/generate-build-matrices.py "$NX_BASE" Debug
 
   build:
@@ -131,7 +131,6 @@ jobs:
         run: |
           ./gradlew $MODULES
 
-      # REMOVED the github.repository check so your fork can upload artifacts
       - name: Upload APKs (${{ matrix.chunk.number }})
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -182,8 +181,30 @@ jobs:
           java -jar ./Inspector.jar "repo/apk" "output.json" "tmp"
           python ./.github/scripts/create-repo.py
 
-      # NEW STEP: Upload the final combined repo as an artifact
-      - name: Upload final combined repo
+      - name: Checkout repo branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.repository_owner }}/anime-repo
+          token: ${{ secrets.BOT_PAT }}
+          ref: repo
+          path: repo
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge repo
+        env:
+          DELETE: ${{ needs.prepare.outputs.delete }}
+        run: |
+          cd repo
+          python ../${{ github.ref_name }}/.github/scripts/merge-repo.py "$DELETE" '${{ github.ref_name }}/repo'
+
+      - name: Deploy repo
+        uses: EndBug/add-and-commit@290ea2c423ad77ca9c62ae0f5b224379612c0321 # v10.0.0
+        with:
+          message: "${{ needs.prepare.outputs.latestCommitMessage }}"
+          cwd: "./repo"
+
+      - name: Upload final combined repo as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: combined-repo-build

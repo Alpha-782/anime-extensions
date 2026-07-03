@@ -25,7 +25,7 @@ raw_branches = run_command("git branch -r")
 branches = []
 for line in raw_branches.splitlines():
     line = line.strip()
-    # Skip HEAD pointer and base/publish branches
+    # Skip HEAD pointer and base/publish/actions branches
     if "HEAD" in line or "->" in line:
         continue
     if "origin/main-actions" in line or "origin/master" in line or "origin/repo" in line:
@@ -43,6 +43,8 @@ for branch in branches:
     print(f"===================================")
     print(f"Merging origin/{branch}...")
 
+    # Attempt to merge. If it fails, exit with an error.
+    # -X ours automatically resolves conflicts by keeping main-actions' files
     result = subprocess.run(f"git merge origin/{branch} --no-edit --allow-unrelated-histories -X ours", shell=True, text=True, capture_output=True)
 
     if result.returncode != 0:

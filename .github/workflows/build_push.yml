@@ -4,13 +4,13 @@ on:
   push:
     branches:
       - master
+      - main-actions
     paths:
       - '**'
       - '!**.md'
       - '!.github/**'
       - '.github/scripts/**'
       - '.github/workflows/build_push.yml'
-  # Manual trigger
   workflow_dispatch:
 
 permissions: {}
@@ -40,6 +40,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Dynamically Merge All Branches
+        run: python ./.github/scripts/merge-all-branches.py
+
       - name: Set env
         id: set-env
         run: |
@@ -58,12 +61,8 @@ jobs:
           files_separator: " "
           safe_output: false
 
-        # This step is going to commit, but this will not trigger another workflow.
-        # If any changes to lib/ caused on master branch, bump the extensions that uses the modified lib.
-        # If any changes caused by the merge commit, skip this step because versions should already pumped with that merge.
-        # But that should be avoided because our own extensions may not be bumped.
       - name: Bump extensions that use a modified lib
-        if: steps.modified-libs.outputs.any_changed == 'true' && github.repository == 'yuzono/anime-extensions'
+        if: steps.modified-libs.outputs.any_changed == 'true'
         env:
           COMMIT_MESSAGE: ${{ steps.set-env.outputs.LATEST_COMMIT_MESSAGE }}
         run: |
@@ -72,7 +71,6 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           chmod +x ./.github/scripts/bump-versions.py
           ./.github/scripts/bump-versions.py "$COMMIT_MESSAGE" ${{ steps.modified-libs.outputs.all_changed_files }}
-          git push
 
       - name: Get last successful CI commit
         uses: nrwl/nx-set-shas@afb73a62d26e41464e9254689e1fd6122ee683c1 # v5.0.1
@@ -99,6 +97,9 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           persist-credentials: false
+
+      - name: Dynamically Merge All Branches
+        run: python ./.github/scripts/merge-all-branches.py
 
       - name: Set up Java
         uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
@@ -130,9 +131,9 @@ jobs:
         run: |
           ./gradlew $MODULES
 
+      # REMOVED the github.repository check so your fork can upload artifacts
       - name: Upload APKs (${{ matrix.chunk.number }})
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.repository == 'yuzono/anime-extensions'
         with:
           name: "individual-apks-${{ matrix.chunk.number }}"
           path: "**/*.apk"
@@ -144,7 +145,7 @@ jobs:
   publish:
     name: Publish extension repo
     needs: [prepare, build]
-    if: always() && github.repository == 'yuzono/anime-extensions'
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -167,6 +168,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Dynamically Merge All Branches
+        run: |
+          cd ${{ github.ref_name }}
+          python ./.github/scripts/merge-all-branches.py
+
       - name: Create repo artifacts
         run: |
           cd ${{ github.ref_name }}
@@ -176,27 +182,9 @@ jobs:
           java -jar ./Inspector.jar "repo/apk" "output.json" "tmp"
           python ./.github/scripts/create-repo.py
 
-      - name: Checkout repo branch
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # NEW STEP: Upload the final combined repo as an artifact
+      - name: Upload final combined repo
+        uses: actions/upload-artifact@v4
         with:
-          repository: yuzono/aniyomi-repo
-          token: ${{ secrets.BOT_PAT }}
-          ref: repo
-          path: repo
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Merge repo
-        env:
-          DELETE: ${{ needs.prepare.outputs.delete }}
-        run: |
-          cd repo
-          python ../${{ github.ref_name }}/.github/scripts/merge-repo.py "$DELETE" '${{ github.ref_name }}/repo'
-
-      - name: Deploy repo
-        uses: EndBug/add-and-commit@290ea2c423ad77ca9c62ae0f5b224379612c0321 # v10.0.0
-        with:
-          message: "${{ needs.prepare.outputs.latestCommitMessage }}"
-          cwd: "./repo"
-          # committer_name: github-actions[bot]
-          # committer_email: github-actions[bot]@users.noreply.github.com
+          name: combined-repo-build
+          path: ${{ github.ref_name }}/repo/

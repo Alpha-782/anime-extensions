@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import subprocess
 import sys
+import os
 
 def run_command(cmd, check=True):
     print(f"Running: {cmd}")
@@ -56,3 +57,8 @@ for branch in branches:
     print(result.stdout)
 
 print("All branches merged successfully!")
+
+# NEW: Save the merged branch names to a file so the workflow can use them
+with open("merged-branches.txt", "w") as f:
+    for b in branches:
+        f.write(b + "\n")

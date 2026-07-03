@@ -51,10 +51,23 @@ jobs:
       - name: Set env
         id: set-env
         run: |
+          # Read the merged branches file and format them as GitHub links
+          MERGED_BRANCHES_DETAILS=""
+          if [ -f "merged-branches.txt" ]; then
+            while read -r branch; do
+              if [ -n "$branch" ]; then
+                MERGED_BRANCHES_DETAILS="${MERGED_BRANCHES_DETAILS}\n - [$branch](https://github.com/${{ github.repository }}/tree/$branch)"
+              fi
+            done < merged-branches.txt
+          fi
+
           echo "LATEST_COMMIT_MESSAGE<<{delimiter}
           $(git log -1 --pretty=%B)
 
           Built on commit: $(git log -1 --pretty=%H)
+          
+          Merged branches:
+          $MERGED_BRANCHES_DETAILS
           {delimiter}" >> $GITHUB_OUTPUT
 
       - name: Find lib changes

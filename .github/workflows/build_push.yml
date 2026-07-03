@@ -38,9 +38,15 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          # We need a token with write permissions to push back to the branch
+          token: ${{ secrets.BOT_PAT }}
 
       - name: Dynamically Merge All Branches
         run: python ./.github/scripts/merge-all-branches.py
+
+      # NEW STEP: Save the merged code to the main-actions branch
+      - name: Push merged state to main-actions
+        run: git push origin ${{ github.ref_name }}
 
       - name: Set env
         id: set-env
@@ -97,9 +103,6 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           persist-credentials: false
-
-      - name: Dynamically Merge All Branches
-        run: python ./.github/scripts/merge-all-branches.py
 
       - name: Set up Java
         uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
@@ -166,11 +169,6 @@ jobs:
           path: ${{ github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Dynamically Merge All Branches
-        run: |
-          cd ${{ github.ref_name }}
-          python ./.github/scripts/merge-all-branches.py
 
       - name: Create repo artifacts
         run: |

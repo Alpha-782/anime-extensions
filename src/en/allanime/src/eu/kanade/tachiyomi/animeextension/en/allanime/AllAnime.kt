@@ -195,7 +195,7 @@ class AllAnime :
         val slugTime = if (time.isNotEmpty()) "-st-$time" else time
         val siteUrl = preferences.siteUrl
 
-        return "$siteUrl/bangumi/$id"
+        return "$siteUrl/anime/$id"
     }
 
     override fun animeDetailsParse(response: Response): SAnime {
@@ -632,8 +632,8 @@ class AllAnime :
         ListPreference(screen.context).apply {
             key = PREF_SITE_DOMAIN_KEY
             title = "Preferred domain for site (requires app restart)"
-            entries = arrayOf("allmanga.to")
-            entryValues = arrayOf("https://allmanga.to")
+            entries = arrayOf("mkissa.to")
+            entryValues = arrayOf("https://mkissa.to")
             setDefaultValue(PREF_SITE_DOMAIN_DEFAULT)
             summary = "%s"
         }.also(screen::addPreference)

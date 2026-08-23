@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
+import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import keiyoushi.utils.addEditTextPreference
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.addSwitchPreference
@@ -32,6 +33,7 @@ import org.jsoup.nodes.Element
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -54,6 +56,12 @@ class AnimePahe :
         client.newBuilder().apply {
             interceptors().removeAll { it is DdosGuardInterceptor }
         }.build()
+    }
+
+    private val searchClient by lazy {
+        client.newBuilder()
+            .rateLimit(2, 1, TimeUnit.SECONDS)
+            .build()
     }
 
     override val name = "AnimePahe"
@@ -609,32 +617,61 @@ class AnimePahe :
     private suspend fun fetchSessionAndId(animeId: String?, title: String?): Pair<String, String>? {
         if (title.isNullOrBlank()) return null
 
+        val searchQuery = normalizeSearchQuery(title)
+        val words = searchQuery.split(" ").filter { it.isNotBlank() }
+
+        val normalizedTitle = normalizeTitle(title)
+
+        // Define the trailing lengths we want to try
+        // e.g. 4 words ("Dungeon IV Part 2"), 3 words ("IV Part 2")
+        val trailingLengths = listOf(4, 3)
+
+        // Try searching with the full normalized title first
+        var result = searchApiForId(animeId, normalizedTitle, searchQuery)
+        if (result != null) return result
+
+        for (len in trailingLengths) {
+            if (words.size > len) {
+                val shortQuery = words.takeLast(len).joinToString(" ")
+                result = searchApiForId(animeId, normalizedTitle, shortQuery)
+                if (result != null) return result
+            }
+        }
+
+        return null
+    }
+
+    private suspend fun searchApiForId(animeId: String?, normalizedTitle: String?, query: String): Pair<String, String>? {
         val searchUrl = baseUrl.toHttpUrl().newBuilder().apply {
             addPathSegment("api")
             addQueryParameter("m", "search")
-            addQueryParameter("q", title)
+            addQueryParameter("q", query)
         }.build()
 
         return try {
-            client.newCall(GET(searchUrl)).await().use { response ->
+            searchClient.newCall(GET(searchUrl)).await().use { response ->
                 if (!response.isSuccessful) return null
                 val searchData = response.parseAs<ResponseDto<SearchResultDto>>()
 
                 val matchedAnime = if (animeId != null) {
                     searchData.items.firstOrNull { it.id.toString() == animeId }
+                } else if (normalizedTitle != null) {
+                    searchData.items.firstOrNull { normalizeTitle(it.title) == normalizedTitle }
                 } else {
-                    val normalizedQuery = normalizeTitle(title)
-                    searchData.items.firstOrNull { normalizeTitle(it.title).contains(normalizedQuery) }
+                    null
                 }
 
-                if (matchedAnime == null) return null
-
-                matchedAnime.let { it.id.toString() to it.session }
+                matchedAnime?.let { it.id.toString() to it.session }
             }
         } catch (_: Exception) {
             null
         }
     }
+
+    private fun normalizeSearchQuery(raw: String): String = raw
+        .replace(SEARCH_NORMALIZE_REGEX, "")
+        .replace(SPACE_NORMALIZE_REGEX, " ")
+        .trim()
 
     private fun normalizeTitle(raw: String): String = raw
         .lowercase()
@@ -663,7 +700,8 @@ class AnimePahe :
         }
 
         private val NORMALIZE_REGEX = Regex("[^a-z0-9]+")
-
+        private val SPACE_NORMALIZE_REGEX = Regex("\\s+")
+        private val SEARCH_NORMALIZE_REGEX = Regex("[^a-zA-Z0-9\\s]+")
         private val QUALITY_REGEX_P by lazy { Regex("""(\d+)p""") }
         private val QUALITY_REGEX by lazy { Regex("""(\d+)""") }
 

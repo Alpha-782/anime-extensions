@@ -7,10 +7,11 @@ import androidx.preference.PreferenceScreen
 import aniyomi.lib.playlistutils.PlaylistUtils
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
+import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.util.asJsoup
@@ -37,68 +38,61 @@ abstract class ModList(
     override val lang: String,
     private val mmodlistType: String,
     private val hostKeyword: String,
-) : ParsedAnimeHttpSource(),
+) : AnimeHttpSource(),
     ConfigurableAnimeSource {
 
     override val baseUrl by lazy {
-        val stored = preferences.getString(PREF_DOMAIN_KEY, defaultBaseUrl)!!
-        if (hostKeyword == "moviesmod" && (stored == "https://moviesmod.red" || stored == "https://moviesmod.army")) {
-            preferences.edit().putString(PREF_DOMAIN_KEY, defaultBaseUrl).apply()
-            defaultBaseUrl
-        } else {
-            stored
-        }
+        preferences.getString(PREF_DOMAIN_KEY, defaultBaseUrl)!!
     }
 
-    protected val currentBaseUrl by lazy {
-        runCatching {
-            runBlocking {
-                withContext(Dispatchers.Default) {
-                    // Try baseUrl first, handling HTTP redirects
-                    val resolvedFromBase = runCatching {
-                        client.newBuilder()
-                            .followRedirects(false)
-                            .build()
-                            .newCall(GET("$baseUrl/")).await().use { resp ->
-                                when (resp.code) {
-                                    301, 302, 307, 308 -> {
-                                        val target = resp.headers["location"]
-                                            ?.let { resp.request.url.resolve(it) }
-                                            ?.takeIf { it.host.contains(hostKeyword) }
-                                        val origin = target?.let { "${it.scheme}://${it.host}" }
-                                        if (origin != null && resp.code in setOf(301, 308)) {
-                                            preferences.edit().putString(PREF_DOMAIN_KEY, origin).apply()
-                                        }
-                                        origin ?: baseUrl
-                                    }
-                                    in 200..299 -> baseUrl
-                                    else -> null
-                                }
-                            }
-                    }.getOrNull()
+    @Volatile
+    private var resolvedBaseUrl: String? = null
 
-                    if (resolvedFromBase != null) return@withContext resolvedFromBase
+    protected val currentBaseUrl: String
+        get() {
+            resolvedBaseUrl?.let { return it }
+            return runCatching {
+                runBlocking {
+                    withContext(Dispatchers.Default) {
+                        resolveBaseUrl()
+                    }
+                }
+            }.getOrDefault(baseUrl)
+        }
 
-                    // Fallback: resolve latest domain via mmodlist redirect which always points to current domain
-                    val latest = runCatching {
-                        client.newCall(GET(mmodlistUrl, headers)).execute().use { resp ->
-                            val body = resp.body.string()
-                            // mmodlist returns 200 with "Redirecting to https://<domain>"
-                            // Trim trailing dot/slash that can come from sentence punctuation
-                            // Use generic regex but prefer hostKeyword specific if found
-                            val specificRegex = Regex("""https://${Regex.escape(hostKeyword)}\.[a-z0-9.-]+""")
-                            (specificRegex.find(body)?.value ?: Regex("""https://[a-z0-9.-]+\.[a-z]{2,}""").find(body)?.value)
-                                ?.trimEnd('/', '.')
-                        }
-                    }.getOrNull()
-
-                    latest?.let {
-                        preferences.edit().putString(PREF_DOMAIN_KEY, it).apply()
-                        it
-                    } ?: baseUrl
+    private suspend fun resolveBaseUrl(): String {
+        val resolvedFromBase = runCatching {
+            client.newCall(GET("$baseUrl/")).await().use { resp ->
+                if (resp.isSuccessful) {
+                    val origin = "${resp.request.url.scheme}://${resp.request.url.host}"
+                    if (origin != baseUrl) {
+                        preferences.edit().putString(PREF_DOMAIN_KEY, origin).apply()
+                    }
+                    origin
+                } else {
+                    null
                 }
             }
-        }.getOrDefault(baseUrl)
+        }.getOrNull()
+
+        if (resolvedFromBase != null) {
+            resolvedBaseUrl = resolvedFromBase
+            return resolvedFromBase
+        }
+
+        val latest = runCatching {
+            client.newCall(GET(mmodlistUrl, headers)).await().use { resp ->
+                val body = resp.body.string()
+                val specificRegex = Regex("""https://${Regex.escape(hostKeyword)}\.[a-z0-9-]+(?:\.[a-z]{2,})?(?=["'\s<>])""")
+                specificRegex.find(body)?.value?.trimEnd('/', '.')
+            }
+        }.getOrNull()
+
+        return latest?.let {
+            preferences.edit().putString(PREF_DOMAIN_KEY, it).apply()
+            resolvedBaseUrl = it
+            it
+        } ?: baseUrl
     }
 
     private val mmodlistUrl: String
@@ -111,13 +105,21 @@ abstract class ModList(
     protected val preferences by getPreferencesLazy()
 
     protected val playlistUtils by lazy { PlaylistUtils(client, headers) }
+    protected val redirectBypasser by lazy { RedirectorBypasser(client, headers) }
 
     // ============================== Popular ===============================
-    override fun popularAnimeRequest(page: Int): Request = GET("$currentBaseUrl/page/$page/")
+    override fun popularAnimeRequest(page: Int): Request = GET("$currentBaseUrl/page/$page/", headers)
 
-    override fun popularAnimeSelector(): String = "div#content_box div.post-cards > article"
+    override fun popularAnimeParse(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val animes = document.select(popularAnimeSelector()).map { popularAnimeFromElement(it) }
+        val hasNextPage = document.selectFirst(popularAnimeNextPageSelector()) != null
+        return AnimesPage(animes, hasNextPage)
+    }
 
-    override fun popularAnimeFromElement(element: Element) = SAnime.create().apply {
+    protected open fun popularAnimeSelector(): String = "div#content_box div.post-cards > article"
+
+    protected open fun popularAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
         setUrlWithoutDomain(element.select("a").attr("abs:href"))
         val img = element.selectFirst("div.featured-thumbnail > img")
         thumbnail_url = img?.attr("abs:data-src")?.takeIf { it.isNotBlank() } ?: img?.attr("abs:src")
@@ -125,45 +127,60 @@ abstract class ModList(
             .replace("Download", "").trim()
     }
 
-    override fun popularAnimeNextPageSelector(): String = "#content_box > nav > div > a.next.page-numbers"
+    protected open fun popularAnimeNextPageSelector(): String = "#content_box > nav > div > a.next.page-numbers"
 
     // =============================== Latest ===============================
     override fun latestUpdatesRequest(page: Int): Request = throw UnsupportedOperationException()
-
-    override fun latestUpdatesSelector(): String = throw UnsupportedOperationException()
-
-    override fun latestUpdatesFromElement(element: Element): SAnime = throw UnsupportedOperationException()
-
-    override fun latestUpdatesNextPageSelector(): String = throw UnsupportedOperationException()
+    override fun latestUpdatesParse(response: Response): AnimesPage = throw UnsupportedOperationException()
 
     // =============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
         val cleanQuery = query.replace(" ", "+").lowercase()
-        return GET("$currentBaseUrl/search/$cleanQuery/page/$page")
+        return GET("$currentBaseUrl/search/$cleanQuery/page/$page", headers)
     }
 
-    override fun searchAnimeSelector(): String = popularAnimeSelector()
+    override fun searchAnimeParse(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val animes = document.select(searchAnimeSelector()).map { searchAnimeFromElement(it) }
+        val hasNextPage = document.selectFirst(searchAnimeNextPageSelector()) != null
+        return AnimesPage(animes, hasNextPage)
+    }
 
-    override fun searchAnimeFromElement(element: Element): SAnime = popularAnimeFromElement(element)
+    protected open fun searchAnimeSelector(): String = popularAnimeSelector()
 
-    override fun searchAnimeNextPageSelector(): String = popularAnimeNextPageSelector()
+    protected open fun searchAnimeFromElement(element: Element): SAnime = popularAnimeFromElement(element)
+
+    protected open fun searchAnimeNextPageSelector(): String = popularAnimeNextPageSelector()
 
     // =========================== Anime Details ============================
-    override fun animeDetailsParse(document: Document) = SAnime.create().apply {
+    override fun animeDetailsRequest(anime: SAnime): Request = GET(currentBaseUrl + anime.url, headers)
+
+    override fun animeDetailsParse(response: Response): SAnime = animeDetailsParse(response.asJsoup())
+
+    protected open fun animeDetailsParse(document: Document): SAnime = SAnime.create().apply {
         initialized = true
         title = document.selectFirst(".entry-title")?.text()
             ?.replace("Download", "", true)?.trim() ?: "Movie"
         status = SAnime.UNKNOWN
-        author = document.selectFirst("div.entry-content > div.thecontent > div.imdbwp > div.imdbwp__content > div.imdbwp__footer > span")?.text()
-        description = document.selectFirst("div.entry-content > div.thecontent > div.imdbwp > div.imdbwp__content > div.imdbwp__teaser")?.text()
+        val (authorText, descText) = document.parseImdbwp()
+        author = authorText
+        description = descText
+    }
+
+    protected fun Document.parseImdbwp(): Pair<String?, String?> {
+        val author = selectFirst("div.entry-content > div.thecontent > div.imdbwp > div.imdbwp__content > div.imdbwp__footer > span")?.text()
+            ?: selectFirst("div.imdbwp__footer span")?.text()
+        val description = selectFirst("div.entry-content > div.thecontent > div.imdbwp > div.imdbwp__content > div.imdbwp__teaser")?.text()
+            ?: selectFirst("div.imdbwp__teaser")?.text()
+            ?: selectFirst("div.thecontent")?.text()?.take(500)
+        return Pair(author, description)
     }
 
     // ============================== Episodes ==============================
-    override fun episodeListRequest(anime: SAnime) = GET(currentBaseUrl + anime.url, headers)
+    override fun episodeListRequest(anime: SAnime): Request = GET(currentBaseUrl + anime.url, headers)
 
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = response.asJsoup()
-        // Original selector + fallback for site redesign / domain change
         val episodeElements = doc.select("p:has(a.maxbutton-episode-links,a.maxbutton-download-links)")
             .ifEmpty { doc.select("p:has(a[class*=maxbutton])") }
             .asSequence()
@@ -172,25 +189,19 @@ abstract class ModList(
             throw Exception("No episode links found. Site may have changed or is behind Cloudflare.")
         }
 
-        val qualityRegex = "\\d{3,4}p(?:\\s+\\w+)?".toRegex(RegexOption.IGNORE_CASE)
-        val seasonRegex = "[ .]?S(?:eason)?[ .]?(\\d{1,2})[ .]?".toRegex(RegexOption.IGNORE_CASE)
-        val movieTitleRegex = "^[^(]+\n?".toRegex(RegexOption.IGNORE_CASE)
-
-        // Safe check for series vs movie; avoid NPE on empty or missing text
         val isSerie = episodeElements.firstOrNull()?.selectFirst("a")?.text()?.equals("Episode Links", ignoreCase = true) == true
 
-        // Parallelize child-page fetches to avoid performance regression vs sequential Jsoup.connect
         val childPageLoaded = AtomicBoolean(false)
         val triples = episodeElements.toList().parallelMapNotNullBlocking { row ->
             runCatching {
                 val prevP = row.previousElementSiblings()
                     .firstOrNull { it.text().isNotBlank() }?.text().orEmpty()
 
-                val quality = qualityRegex.find(prevP)?.value ?: "HD"
+                val quality = QUALITY_REGEX.find(prevP)?.value ?: "HD"
                 val defaultName = if (isSerie) {
-                    seasonRegex.find(prevP)?.value ?: "Season 1"
+                    SEASON_REGEX.find(prevP)?.value ?: "Season 1"
                 } else {
-                    movieTitleRegex.find(prevP.replace("Download", "").trim())?.value ?: "Movie"
+                    MOVIE_TITLE_REGEX.find(prevP.replace("Download", "").trim())?.value?.trim() ?: "Movie"
                 }
 
                 val episodePageUrl = row.selectFirst("a[href]")?.attr("abs:href")?.takeUnless { it.isBlank() }
@@ -261,33 +272,32 @@ abstract class ModList(
     protected fun extractChildUrl(mainUrl: String): String {
         return runCatching {
             val urlParam = mainUrl.toHttpUrl().queryParameter("url") ?: return mainUrl
-            val flags = if (urlParam.contains("-") || urlParam.contains("_")) Base64.URL_SAFE else Base64.DEFAULT
-            String(Base64.decode(urlParam, flags))
+            val decoded = runCatching { Base64.decode(urlParam, Base64.URL_SAFE) }
+                .getOrElse { Base64.decode(urlParam, Base64.DEFAULT) }
+            String(decoded)
         }.getOrDefault(mainUrl)
     }
-
-    override fun episodeListSelector(): String = "p:has(a.maxbutton-episode-links)"
-
-    override fun episodeFromElement(element: Element): SEpisode = throw UnsupportedOperationException()
 
     // ============================ Video Links =============================
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
         val urlJson = json.decodeFromString<EpLinks>(episode.url)
 
         return urlJson.urls.parallelCatchingFlatMap { eplink ->
-            val mediaUrl = getMediaUrl(eplink) ?: return@parallelCatchingFlatMap emptyList()
+            val resolvedUrl = resolveEpUrl(eplink.url) ?: return@parallelCatchingFlatMap emptyList()
+            val mediaUrl = getMediaUrl(EpUrl(url = resolvedUrl, quality = eplink.quality)) ?: return@parallelCatchingFlatMap emptyList()
             extractVideos(mediaUrl, eplink.quality)
         }
     }
 
-    protected fun extractVideos(fileUrl: String, quality: String): List<Video> {
-        val doc = runCatching { client.newCall(GET(fileUrl, headers)).execute().asJsoup() }.getOrNull()
+    protected open suspend fun resolveEpUrl(url: String): String? = url
+
+    protected suspend fun extractVideos(fileUrl: String, quality: String): List<Video> {
+        val doc = runCatching { client.newCall(GET(fileUrl, headers)).await().asJsoup() }.getOrNull()
             ?: return emptyList()
 
         val btns = doc.select("div.card-body a.btn")
         if (btns.isEmpty()) return emptyList()
 
-        // Extract videos, handling HLS via PlaylistUtils where applicable
         return btns.flatMap { btn ->
             val href = btn.attr("abs:href").takeUnless { it.isBlank() } ?: return@flatMap emptyList()
             val size = SIZE_REGEX.find(btn.text())?.groupValues?.get(1)?.let { " - $it" } ?: ""
@@ -297,7 +307,7 @@ abstract class ModList(
                     href.contains("r2.dev") || href.contains("instant.video-gen") -> {
                     val finalUrl = runCatching {
                         val headRequest = GET(href, headers).newBuilder().head().build()
-                        client.newCall(headRequest).execute().use { resp ->
+                        client.newCall(headRequest).await().use { resp ->
                             if (!resp.isSuccessful) return@use null
                             resp.request.url.queryParameter("url") ?: resp.request.url.toString()
                         }
@@ -324,47 +334,37 @@ abstract class ModList(
                 }
                 href.contains("/login") -> emptyList()
                 else -> {
-                    // Fallback for r2.dev, seedtg.xyz, tgcdn_bot and future hosts - expose as direct
                     listOf(Video(href, "$quality - Direct$size", href))
                 }
             }
         }
     }
 
-    override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException()
-
-    override fun videoListSelector(): String = throw UnsupportedOperationException()
-
-    override fun videoUrlParse(document: Document): String = throw UnsupportedOperationException()
-
     // ============================= Utilities ==============================
-    protected val redirectBypasser by lazy { RedirectorBypasser(client, headers) }
-
-    protected fun getMediaUrl(epUrl: EpUrl): String? {
+    protected suspend fun getMediaUrl(epUrl: EpUrl): String? {
         val url = epUrl.url
         val mediaResponse = if (url.contains("?sid=")) {
-            /* redirector bs */
             val finalUrl = redirectBypasser.bypass(url) ?: return null
-            client.newCall(GET(finalUrl)).execute()
+            client.newCall(GET(finalUrl, headers)).await()
         } else if (url.contains("r?key=")) {
-            /* everything under control */
-            client.newCall(GET(url)).execute()
+            client.newCall(GET(url, headers)).await()
         } else {
             return null
         }
 
-        val path = mediaResponse.body.string().substringAfter("replace(\"").substringBefore("\"")
-
-        if (path == "/404") return null
-
-        return "https://" + mediaResponse.request.url.host + path
+        return mediaResponse.use { resp ->
+            val body = resp.body.string()
+            val path = PATH_REGEX.find(body)?.groupValues?.get(1)
+            if (path == "/404" || path == null) return null
+            resp.request.url.resolve(path)?.toString()
+        }
     }
 
     override fun List<Video>.sort(): List<Video> {
         val quality = preferences.getString(PREF_QUALITY_KEY, PREF_QUALITY_DEFAULT)!!
         val ascSort = preferences.getString(PREF_SIZE_SORT_KEY, PREF_SIZE_SORT_DEFAULT)!! == "asc"
 
-        val comparator = compareByDescending<Video> { it.quality.contains(quality) }.let { cmp ->
+        val comparator = compareByDescending<Video> { it.quality.startsWith(quality) }.let { cmp ->
             if (ascSort) {
                 cmp.thenBy { it.quality.fixQuality() }
             } else {
@@ -398,7 +398,8 @@ abstract class ModList(
                 val selected = newValue as String
                 val index = findIndexOfValue(selected)
                 val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
+                preferences.edit().putString(key, entry).apply()
+                true
             }
         }.also(screen::addPreference)
 
@@ -414,7 +415,8 @@ abstract class ModList(
                 val selected = newValue as String
                 val index = findIndexOfValue(selected)
                 val entry = entryValues[index] as String
-                preferences.edit().putString(key, entry).commit()
+                preferences.edit().putString(key, entry).apply()
+                true
             }
         }.also(screen::addPreference)
 
@@ -428,9 +430,10 @@ abstract class ModList(
             setOnPreferenceChangeListener { _, newValue ->
                 runCatching {
                     val value = (newValue as String).ifEmpty { defaultBaseUrl }
-                    preferences.edit().putString(key, value).commit().also {
+                    preferences.edit().putString(key, value).apply().also {
                         summary = getDomainPrefSummary()
                     }
+                    true
                 }.getOrDefault(false)
             }
         }.also(screen::addPreference)
@@ -449,30 +452,31 @@ abstract class ModList(
 
     protected fun EpLinks.toJson(): String = json.encodeToString(this)
 
-    private fun getDomainPrefSummary(): String = preferences.getString(PREF_DOMAIN_KEY, defaultBaseUrl)!!.let {
-        """$it
-                |For any change to be applied App restart is required.
-        """.trimMargin()
+    private fun getDomainPrefSummary(): String {
+        val current = preferences.getString(PREF_DOMAIN_KEY, defaultBaseUrl)!!
+        return "$current\nFor any change to be applied App restart is required."
     }
 
     companion object {
-        private val SIZE_REGEX = "\\[((?:.(?!\\[))+)]*\\$".toRegex(RegexOption.IGNORE_CASE)
+        private val SIZE_REGEX = "\\[([^]]+)]".toRegex(RegexOption.IGNORE_CASE)
+        private val PATH_REGEX = Regex("""["'](/[^"']*)["']""")
+        private val QUALITY_REGEX = "\\d{3,4}p(?:\\s+\\w+)?".toRegex(RegexOption.IGNORE_CASE)
+        private val SEASON_REGEX = "[ .]?S(?:eason)?[ .]?(\\d{1,2})[ .]?".toRegex(RegexOption.IGNORE_CASE)
+        private val MOVIE_TITLE_REGEX = "^[^(]+".toRegex(RegexOption.IGNORE_CASE)
 
         private const val PREF_DOMAIN_KEY = "pref_domain_new"
         private const val PREF_DOMAIN_TITLE = "Currently used domain"
         private const val PREF_DOMAIN_DIALOG_TITLE = PREF_DOMAIN_TITLE
 
         private const val PREF_QUALITY_KEY = "preferred_quality"
-        private const val PREF_QUALITY_TITLE = "Prefferred quality"
+        private const val PREF_QUALITY_TITLE = "Preferred quality"
         private const val PREF_QUALITY_DEFAULT = "1080p"
         private val PREF_QUALITY_ENTRIES = arrayOf("2160p", "1080p", "720p", "480p")
 
         private const val PREF_SIZE_SORT_KEY = "preferred_size_sort"
         private const val PREF_SIZE_SORT_TITLE = "Preferred Size Sort"
         private const val PREF_SIZE_SORT_DEFAULT = "asc"
-        private val PREF_SIZE_SORT_SUMMARY = """%s
-            |Sort order to be used after the videos are sorted by their quality.
-        """.trimMargin()
+        private const val PREF_SIZE_SORT_SUMMARY = "%s\nSort order to be used after the videos are sorted by their quality."
         private val PREF_SIZE_SORT_ENTRIES = arrayOf("Ascending", "Descending")
         private val PREF_SIZE_SORT_VALUES = arrayOf("asc", "desc")
     }

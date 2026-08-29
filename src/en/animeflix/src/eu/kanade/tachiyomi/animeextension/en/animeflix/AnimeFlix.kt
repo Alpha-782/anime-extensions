@@ -3,16 +3,17 @@ package eu.kanade.tachiyomi.animeextension.en.animeflix
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
-import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.multisrc.modlist.ModList
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.util.asJsoup
-import keiyoushi.utils.parallelCatchingFlatMap
 import keiyoushi.utils.parallelMapNotNullBlocking
+import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AnimeFlix :
     ModList(
@@ -22,27 +23,34 @@ class AnimeFlix :
         mmodlistType = "animeflix",
         hostKeyword = "animeflix",
     ) {
+
+    private val noRedirectClient by lazy {
+        client.newBuilder().followRedirects(false).build()
+    }
+
+    // Add a Referer header to all requests to bypass anti-hotlinking for thumbnails
+    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+        .add("Referer", "$baseUrl/")
+
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int): Request = GET("$currentBaseUrl/page/$page/", headers)
 
     override fun popularAnimeSelector(): String = "article.latestPost.excerpt"
 
-    override fun popularAnimeFromElement(element: Element) = SAnime.create().apply {
-        val titleLink = element.selectFirst("h2.title a") ?: element.selectFirst("a[title]")
-        setUrlWithoutDomain(titleLink?.attr("abs:href") ?: element.selectFirst("a")?.attr("abs:href") ?: "")
+    override fun popularAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
+        val titleLink = element.selectFirst("h2.title a") ?: element.selectFirst("a[title]") ?: element.selectFirst("a")
+        setUrlWithoutDomain(titleLink?.attr("abs:href") ?: "")
         title = titleLink?.attr("title")?.ifBlank { titleLink.text() }?.replace("Download", "")?.trim()
             ?: titleLink?.text()?.replace("Download", "")?.trim() ?: ""
-        val img = element.selectFirst("img.wp-post-image") ?: element.selectFirst("img")
-        thumbnail_url = img?.attr("abs:data-src")?.takeIf { it.isNotBlank() }
-            ?: img?.attr("abs:src")
-            ?: img?.attr("abs:data-pagespeed-lazy-src")
-    }
 
-    override fun popularAnimeNextPageSelector(): String = "a.next.page-numbers"
+        val img = element.selectFirst("div.featured-thumbnail img") ?: element.selectFirst("img")
+
+        thumbnail_url = img?.attr("abs:src")?.takeIf { it.isNotBlank() } ?: img?.attr("abs:data-src")
+    }
 
     // =============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
-        val cleanQuery = query.trim().replace(" ", "+")
+        val cleanQuery = query.replace(" ", "+")
         return if (page == 1) {
             GET("$currentBaseUrl/?s=$cleanQuery", headers)
         } else {
@@ -50,26 +58,24 @@ class AnimeFlix :
         }
     }
 
-    override fun searchAnimeSelector(): String = popularAnimeSelector()
-
-    override fun searchAnimeFromElement(element: Element): SAnime = popularAnimeFromElement(element)
-
-    override fun searchAnimeNextPageSelector(): String = popularAnimeNextPageSelector()
-
     // =========================== Anime Details ============================
-    // Reuse ModList's animeDetailsParse which works for imdbwp structure
-    // but ensure title fallback works for animeflix's single-title
-    override fun animeDetailsParse(document: Document) = SAnime.create().apply {
+    override fun animeDetailsParse(document: Document): SAnime = SAnime.create().apply {
         initialized = true
-        title = document.selectFirst("h1.single-title")?.text()
-            ?: document.selectFirst(".entry-title")?.text()
-                ?.replace("Download", "", true)?.trim() ?: "Anime"
+        title = (
+            document.selectFirst("h1.single-title")?.text()
+                ?: document.selectFirst(".entry-title")?.text()
+                ?: "Anime"
+            ).replace("Download", "", true).trim()
         status = SAnime.UNKNOWN
-        author = document.selectFirst("div.entry-content > div.thecontent > div.imdbwp > div.imdbwp__content > div.imdbwp__footer > span")?.text()
-            ?: document.selectFirst("div.imdbwp__footer span")?.text()
-        description = document.selectFirst("div.entry-content > div.thecontent > div.imdbwp > div.imdbwp__content > div.imdbwp__teaser")?.text()
-            ?: document.selectFirst("div.imdbwp__teaser")?.text()
-            ?: document.selectFirst("div.thecontent")?.text()?.take(500)
+        val (authorText, descText) = document.parseImdbwp()
+        author = authorText
+        description = descText
+        // Also try to extract thumbnail from details page
+        val img = document.selectFirst("div.featured-thumbnail img")
+            ?: document.selectFirst("img.wp-post-image")
+            ?: document.selectFirst("img.attachment-full")
+        thumbnail_url = img?.attr("abs:src")?.takeIf { it.isNotBlank() }
+            ?: img?.attr("abs:data-src")?.takeIf { it.isNotBlank() }
     }
 
     // ============================== Episodes ==============================
@@ -80,27 +86,24 @@ class AnimeFlix :
             throw Exception("No episode links found. Site may have changed or is behind Cloudflare.")
         }
 
-        val qualityRegex = "\\d{3,4}p".toRegex(RegexOption.IGNORE_CASE)
+        val childPageLoaded = AtomicBoolean(false)
 
-        // Each archive link corresponds to a quality (720p / 1080p)
-        // Quality is in preceding heading, e.g. <h3>Download ... 720p ...</h3> -> next p a
         val triples = archiveLinks.parallelMapNotNullBlocking { archiveElement ->
             runCatching {
-                // Find quality by scanning previous siblings for quality string
                 var prev = archiveElement.parent()?.previousElementSibling()
                 var quality: String? = null
                 var attempts = 0
                 while (prev != null && attempts < 5) {
                     val text = prev.text()
-                    quality = qualityRegex.find(text)?.value
+                    quality = QUALITY_REGEX.find(text)?.value
                     if (quality != null) break
                     prev = prev.previousElementSibling()
+                    attempts++
                 }
-                // Fallback: check parent container's previous heading or document title
                 if (quality == null) {
                     val heading = archiveElement.parents().firstOrNull { it.selectFirst("h3") != null }
                         ?.selectFirst("h3")?.text()
-                    quality = heading?.let { qualityRegex.find(it)?.value }
+                    quality = heading?.let { QUALITY_REGEX.find(it)?.value }
                 }
                 val finalQuality = quality ?: "HD"
 
@@ -110,26 +113,21 @@ class AnimeFlix :
                 val archiveDoc = runCatching {
                     client.newCall(GET(archiveUrl, headers)).execute().asJsoup()
                 }.getOrNull() ?: return@parallelMapNotNullBlocking null
+                childPageLoaded.set(true)
 
-                // Episodes page contains links like <a href="https://episodes.animeflix.dad/getlink/...">Episode 67</a>
                 val episodeLinks = archiveDoc.select("a[href*=/getlink/]")
                 if (episodeLinks.isEmpty()) return@parallelMapNotNullBlocking null
 
                 episodeLinks.mapIndexedNotNull { index, linkElement ->
-                    val epText = linkElement.text().trim()
+                    val epText = linkElement.text()
                     val epNum = Regex("""\d+""").find(epText)?.value?.toIntOrNull() ?: (index + 1)
                     val url = linkElement.attr("abs:href").takeUnless { it.isBlank() }
                         ?: return@mapIndexedNotNull null
-                    Triple(
-                        epNum,
-                        url,
-                        finalQuality,
-                    )
+                    Triple(epNum, url, finalQuality)
                 }
             }.getOrNull()
         }.flatten()
 
-        // Group by episode number, merging qualities as separate mirrors
         val grouped = triples.groupBy { it.first }.values.map { items ->
             val epNum = items.first().first
             SEpisode.create().apply {
@@ -141,37 +139,36 @@ class AnimeFlix :
             }
         }
 
-        if (grouped.isEmpty()) throw Exception("Only Zip Pack Available or failed to load episode pages.")
+        if (grouped.isEmpty()) {
+            throw Exception(
+                if (childPageLoaded.get()) {
+                    "Only Zip Pack Available or no episodes found in archives."
+                } else {
+                    "Failed to load episode pages. Site may have changed or is behind Cloudflare."
+                },
+            )
+        }
 
-        // Ensure sorted descending by episode number as per app convention (reversed)
         return grouped.sortedBy { it.episode_number }.reversed()
     }
 
-    private fun resolveGetLink(url: String): String? {
-        // getlink returns 302 to driveseed.org/r?key=...
-        return runCatching {
-            client.newBuilder().followRedirects(false).build()
-                .newCall(GET(url, headers)).execute().use { resp ->
-                    val loc = resp.headers["location"]
-                    if (!loc.isNullOrBlank()) {
-                        // Resolve relative if needed
-                        resp.request.url.resolve(loc)?.toString() ?: loc
-                    } else {
-                        // Fallback parse body for driveseed link
-                        val body = resp.body.string()
-                        Regex("""https://driveseed\.org[^\s"'<>]+""").find(body)?.value
-                    }
-                }
-        }.getOrNull()
-    }
+    // ============================ Video Links =============================
+    override suspend fun resolveEpUrl(url: String): String? = resolveGetLink(url)
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
-        val urlJson = json.decodeFromString<EpLinks>(episode.url)
-        return urlJson.urls.parallelCatchingFlatMap { eplink ->
-            val driveseedUrl = resolveGetLink(eplink.url) ?: return@parallelCatchingFlatMap emptyList()
-            val mediaUrl = getMediaUrl(EpUrl(url = driveseedUrl, quality = eplink.quality))
-                ?: return@parallelCatchingFlatMap emptyList()
-            extractVideos(mediaUrl, eplink.quality)
+    private suspend fun resolveGetLink(url: String): String? = runCatching {
+        noRedirectClient.newCall(GET(url, headers)).await().use { resp ->
+            val loc = resp.headers["location"]
+            if (!loc.isNullOrBlank()) {
+                resp.request.url.resolve(loc)?.toString() ?: loc
+            } else {
+                val body = resp.body.string()
+                SEED_REGEX.find(body)?.value
+            }
         }
+    }.getOrNull()
+
+    companion object {
+        private val SEED_REGEX = Regex("""https://driveseed\.org[^\s"'<>]+""")
+        private val QUALITY_REGEX = "\\d{3,4}p".toRegex(RegexOption.IGNORE_CASE)
     }
 }

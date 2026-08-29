@@ -3,7 +3,7 @@ ext {
     extClass = '.MoviesMod'
     themePkg = 'modlist'
     baseUrl = 'https://moviesmod.zone'
-    overrideVersionCode = 1
+    overrideVersionCode = 2
 }
 
 apply plugin: "kei.plugins.extension.legacy"

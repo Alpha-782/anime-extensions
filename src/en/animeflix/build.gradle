@@ -3,7 +3,7 @@ ext {
     extClass = '.AnimeFlix'
     themePkg = 'modlist'
     baseUrl = 'https://animeflix.dad'
-    overrideVersionCode = 1
+    overrideVersionCode = 0
 }
 
 apply plugin: "kei.plugins.extension.legacy"

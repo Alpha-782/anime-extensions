@@ -3,7 +3,7 @@ ext {
     extClass = '.MoviesLeech'
     themePkg = 'modlist'
     baseUrl = 'https://moviesleech.art'
-    overrideVersionCode = 1
+    overrideVersionCode = 0
 }
 
 apply plugin: "kei.plugins.extension.legacy"

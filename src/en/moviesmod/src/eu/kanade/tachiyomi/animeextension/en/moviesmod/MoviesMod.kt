@@ -9,4 +9,6 @@ class MoviesMod :
         lang = "en",
         mmodlistType = "hollywood",
         hostKeyword = "moviesmod",
-    )
+    ) {
+    override val id = 2828515480418041073L
+}

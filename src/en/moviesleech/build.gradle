@@ -1,8 +1,8 @@
 ext {
-    extName = 'MoviesMod'
-    extClass = '.MoviesMod'
+    extName = 'MoviesLeech'
+    extClass = '.MoviesLeech'
     themePkg = 'modlist'
-    baseUrl = 'https://moviesmod.zone'
+    baseUrl = 'https://moviesleech.art'
     overrideVersionCode = 1
 }
 

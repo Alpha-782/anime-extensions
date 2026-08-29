@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.animeextension.en.moviesmod
+package eu.kanade.tachiyomi.multisrc.modlist
 
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST

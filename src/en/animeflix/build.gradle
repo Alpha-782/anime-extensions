@@ -1,8 +1,8 @@
 ext {
-    extName = 'MoviesMod'
-    extClass = '.MoviesMod'
+    extName = 'AnimeFlix'
+    extClass = '.AnimeFlix'
     themePkg = 'modlist'
-    baseUrl = 'https://moviesmod.zone'
+    baseUrl = 'https://animeflix.dad'
     overrideVersionCode = 1
 }
 

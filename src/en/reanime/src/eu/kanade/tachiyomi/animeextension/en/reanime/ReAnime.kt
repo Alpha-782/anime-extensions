@@ -17,9 +17,9 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.interceptor.rateLimit
+import keiyoushi.utils.AnimeHttpLegacySource
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parallelCatchingFlatMap
@@ -47,7 +47,7 @@ import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.seconds
 
 class ReAnime :
-    AnimeHttpSource(),
+    AnimeHttpLegacySource(),
     ConfigurableAnimeSource {
 
     override val name = "Re:ANIME"
@@ -690,7 +690,7 @@ class ReAnime :
 
         if (excluded.isNotEmpty() || excludedAudio.isNotEmpty()) {
             videos.removeAll { video ->
-                video.serverKey() in excluded || excludedAudio.any { video.quality.startsWith(it) }
+                video.serverKey() in excluded || excludedAudio.any { video.videoTitle.startsWith(it) }
             }
         }
 
@@ -698,10 +698,10 @@ class ReAnime :
         val qualitiesList = PREF_QUALITY_VALUES.reversed()
         val audioTag = if (preferredAudio == "dub") "[Dub]" else "[Sub]"
         return videos.sortedWith(
-            compareByDescending<Video> { it.quality.contains(quality) }
-                .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it) } }
-                .thenByDescending { it.quality.contains(preferredServer, ignoreCase = true) }
-                .thenByDescending { it.quality.contains(audioTag) },
+            compareByDescending<Video> { it.videoTitle.contains(quality) }
+                .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it) } }
+                .thenByDescending { it.videoTitle.contains(preferredServer, ignoreCase = true) }
+                .thenByDescending { it.videoTitle.contains(audioTag) },
         )
     }
 
@@ -717,8 +717,8 @@ class ReAnime :
      * is excluded (a plain contains() would).
      */
     private fun Video.serverKey(): String? {
-        val base = SERVER_NAME_REGEX.find(quality)?.groupValues?.get(1) ?: return null
-        return if (quality.contains("Download", ignoreCase = true)) "$base Download" else base
+        val base = SERVER_NAME_REGEX.find(videoTitle)?.groupValues?.get(1) ?: return null
+        return if (videoTitle.contains("Download", ignoreCase = true)) "$base Download" else base
     }
 
     /**

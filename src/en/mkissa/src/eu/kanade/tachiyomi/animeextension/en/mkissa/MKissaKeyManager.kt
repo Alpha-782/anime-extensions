@@ -220,7 +220,7 @@ class MKissaKeyManager(
 
         private const val KEY_GROUP = "mkissa"
 
-        private const val PREF_BUILD_KEY = "client_build_cache"
+        private const val PREF_BUILD_KEY = "client_build_cache_v3"
         private const val FIELD_SEPARATOR = "|"
 
         private const val MAX_BUILD_CHUNKS = 40

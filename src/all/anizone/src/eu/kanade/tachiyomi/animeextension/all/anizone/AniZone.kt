@@ -15,11 +15,11 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.utils.AnimeHttpLegacySource
 import keiyoushi.utils.firstInstance
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
@@ -43,7 +43,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 class AniZone :
-    AnimeHttpSource(),
+    AnimeHttpLegacySource(),
     ConfigurableAnimeSource {
 
     override val name = "AniZone"
@@ -111,7 +111,7 @@ class AniZone :
 
         val isLivewire = res.request.url.encodedPath.contains("/livewire/update")
         val html = if (isLivewire) {
-            res.parseAs<LivewireDto>().getHtml(ANIME_SNAPSHOT_KEY)
+            res.parseAs<LivewireDto>().getHtml(ANIME_SNAPSHOT_KEY).body()
         } else {
             res.asJsoup().updateState(ANIME_SNAPSHOT_KEY)
         }
@@ -280,7 +280,7 @@ class AniZone :
         val res = response.retryOn419 { client.newCall(it).execute() }
 
         val html = if (res.request.url.encodedPath.contains("/livewire/update")) {
-            res.parseAs<LivewireDto>().getHtml(EPISODE_SNAPSHOT_KEY)
+            res.parseAs<LivewireDto>().getHtml(EPISODE_SNAPSHOT_KEY).body()
         } else {
             res.asJsoup().updateState(EPISODE_SNAPSHOT_KEY)
         }
@@ -496,10 +496,10 @@ class AniZone :
                 video.audioTracks.filter { it.lang.containsLang(fallbackAudioValue, fallbackAudioEntry, fallbackAudioRegex) }
             }
             val finalSubs = filterSubs(video.subtitleTracks)
-            Video(video.url, video.quality, video.videoUrl, video.headers, finalSubs, finalAudio)
+            Video(video.videoUrl, video.videoTitle, video.videoUrl, video.headers, finalSubs, finalAudio)
         }.filter { video ->
-            video.quality.containsLang(audioValue, audioEntry, audioRegex) ||
-                video.quality.containsLang(fallbackAudioValue, fallbackAudioEntry, fallbackAudioRegex) ||
+            video.videoTitle.containsLang(audioValue, audioEntry, audioRegex) ||
+                video.videoTitle.containsLang(fallbackAudioValue, fallbackAudioEntry, fallbackAudioRegex) ||
                 video.audioTracks.isNotEmpty()
         }.ifEmpty { allVideos }
     }
@@ -510,16 +510,16 @@ class AniZone :
         val subtitles: List<Track>,
     )
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val quality = preferences.quality
         val audio = preferences.audio
         val subtitle = preferences.subtitle
 
         return sortedWith(
             compareBy(
-                { it.quality.contains(quality) },
-                { it.quality.contains(audio, true) || (audio == "jpn" && (it.quality.contains("jp", true) || it.quality.contains("ja", true))) },
-                { it.quality.contains(subtitle, true) || (subtitle == "eng" && (it.quality.contains("en", true))) },
+                { it.videoTitle.contains(quality) },
+                { it.videoTitle.contains(audio, true) || (audio == "jpn" && (it.videoTitle.contains("jp", true) || it.videoTitle.contains("ja", true))) },
+                { it.videoTitle.contains(subtitle, true) || (subtitle == "eng" && (it.videoTitle.contains("en", true))) },
             ),
         ).reversed()
     }
@@ -564,7 +564,7 @@ class AniZone :
     private fun Document.updateState(mapKey: String): Element {
         this.selectFirst("script[data-csrf]")?.attr("data-csrf")?.takeIf(String::isNotEmpty)?.let { token = it }
         this.getSnapshot()?.let { snapShots[mapKey] = it }
-        return this.selectFirst("main > div[wire:snapshot], main > ul[wire:snapshot]") ?: this
+        return this.selectFirst("main > div[wire:snapshot], main > ul[wire:snapshot]") ?: this.body()
     }
 
     private fun createLivewireReq(

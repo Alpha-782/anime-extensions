@@ -29,11 +29,11 @@ object MKissaCrypto {
     private const val EPOCH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000L
     private const val EPOCH_GRACE_MS = 24 * 60 * 60 * 1000L
 
-    private const val SALT_MUL = 105
-    private const val SALT_ADD = 199
-    private const val FRAG_MUL = 68
-    private const val FRAG_ADD = 109
-    private const val BOOT_PREFIX = "3CPUb1AFbS:"
+    private const val SALT_MUL = 6
+    private const val SALT_ADD = 244
+    private const val FRAG_MUL = 190
+    private const val FRAG_ADD = 88
+    private const val BOOT_PREFIX = "FD0xZhgI:"
 
     fun sha256Hex(value: String): String = MessageDigest.getInstance(HASH_ALGO)
         .digest(value.toByteArray(Charsets.UTF_8))
@@ -85,7 +85,7 @@ object MKissaCrypto {
         lane: String,
     ): String {
         val inner = hmac(mask, "$BOOT_PREFIX$buildId")
-        val message = listOf(refererHost, epoch.toString(), keyGroup, lane, buildId).joinToString("|")
+        val message = listOf(refererHost, epoch.toString(), keyGroup, lane, buildId).joinToString(".")
         return hmac(inner, message).toHex()
     }
 

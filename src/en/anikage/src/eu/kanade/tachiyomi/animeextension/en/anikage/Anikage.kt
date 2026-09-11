@@ -12,10 +12,10 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.network.interceptor.rateLimitHost
+import keiyoushi.utils.AnimeHttpLegacySource
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.addSwitchPreference
 import keiyoushi.utils.getPreferencesLazy
@@ -36,7 +36,7 @@ import kotlin.collections.isNotEmpty
 import kotlin.time.Duration.Companion.seconds
 
 class Anikage :
-    AnimeHttpSource(),
+    AnimeHttpLegacySource(),
     ConfigurableAnimeSource {
 
     override val baseUrl: String = "https://anikage.cc"
@@ -356,12 +356,12 @@ class Anikage :
             videos
         }
             .filterNot { video ->
-                val videoType = video.quality.substringBefore(" - ")
+                val videoType = video.videoTitle.substringBefore(" - ")
                 excludedTypes.any { videoType.equals(it, ignoreCase = true) }
             }
     }
 
-    override fun List<Video>.sort(): List<Video> {
+    override fun List<Video>.sortVideos(): List<Video> {
         val isDubPreferred = preferences.subOrDub == "dub"
         val quality = preferences.quality
         val primaryType = if (isDubPreferred) "Dub" else "Sub"
@@ -370,17 +370,17 @@ class Anikage :
         val qualitiesList = PREF_QUALITY_ENTRIES.reversed()
 
         return sortedWith(
-            compareByDescending<Video> { it.quality.contains(quality) }
-                .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it) } }
+            compareByDescending<Video> { it.videoTitle.contains(quality) }
+                .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it) } }
                 .thenByDescending { video ->
                     when {
-                        video.quality.contains(primaryType, ignoreCase = true) -> 2
-                        video.quality.contains(secondaryType, ignoreCase = true) -> 1
+                        video.videoTitle.contains(primaryType, ignoreCase = true) -> 2
+                        video.videoTitle.contains(secondaryType, ignoreCase = true) -> 1
                         else -> 0
                     }
                 }
                 .thenByDescending { video ->
-                    val videoServer = video.quality.substringAfter(" - ").substringBefore(" - ")
+                    val videoServer = video.videoTitle.substringAfter(" - ").substringBefore(" - ")
                     if (videoServer.equals(preferredServer, ignoreCase = true)) 1 else 0
                 },
         )

@@ -13,9 +13,9 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
+import keiyoushi.utils.AnimeHttpLegacySource
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.addSetPreference
 import keiyoushi.utils.copyLegacy
@@ -31,7 +31,7 @@ import okhttp3.Request
 import okhttp3.Response
 
 class AniNeko :
-    AnimeHttpSource(),
+    AnimeHttpLegacySource(),
     ConfigurableAnimeSource {
 
     override val name = "AniNeko"
@@ -359,7 +359,7 @@ class AniNeko :
                     val extractor = VidHideExtractor(client, headers)
                     extractor.videosFromUrl(iframeUrl) { quality -> "$versionType - $quality" }.map { video ->
                         video.copyLegacy(
-                            quality = addServerName(serverName, video.quality),
+                            quality = addServerName(serverName, video.videoTitle),
                             subtitleTracks = video.subtitleTracks + subtitleTracks,
                         )
                     }
@@ -369,7 +369,7 @@ class AniNeko :
                     val extractor = DoodExtractor(client)
                     extractor.videosFromUrl(iframeUrl, quality = versionType).map { video ->
                         video.copyLegacy(
-                            quality = addServerName(serverName, video.quality),
+                            quality = addServerName(serverName, video.videoTitle),
                             subtitleTracks = video.subtitleTracks + subtitleTracks,
                         )
                     }
@@ -388,20 +388,20 @@ class AniNeko :
 
         val filteredVideos = videos
             .filter { video ->
-                val matchesServer = excludedServers.any { video.quality.contains(it, ignoreCase = true) }
-                val matchesAudio = excludedAudios.any { video.quality.contains(it, ignoreCase = true) }
+                val matchesServer = excludedServers.any { video.videoTitle.contains(it, ignoreCase = true) }
+                val matchesAudio = excludedAudios.any { video.videoTitle.contains(it, ignoreCase = true) }
                 !matchesServer && !matchesAudio
             }
             // Filter out bare "Video" tracks that lack a standard resolution
             .filterNot { video ->
-                video.quality.contains("Video", ignoreCase = true) &&
-                    QUALITY_ENTRIES.none { video.quality.contains(it, ignoreCase = true) }
+                video.videoTitle.contains("Video", ignoreCase = true) &&
+                    QUALITY_ENTRIES.none { video.videoTitle.contains(it, ignoreCase = true) }
             }
 
         val isDoodPreferred = preferredHost.equals("Doodstream", ignoreCase = true)
 
-        fun isDoodVideo(video: Video): Boolean = video.quality.contains("Doodstream", ignoreCase = true) ||
-            video.quality.contains("dood", ignoreCase = true)
+        fun isDoodVideo(video: Video): Boolean = video.videoTitle.contains("Doodstream", ignoreCase = true) ||
+            video.videoTitle.contains("dood", ignoreCase = true)
 
         val qualitiesList = QUALITY_ENTRIES.reversed()
 
@@ -409,25 +409,25 @@ class AniNeko :
             val (doodVideos, otherVideos) = filteredVideos.partition { isDoodVideo(it) }
 
             val sortedDood = doodVideos.sortedWith(
-                compareByDescending<Video> { it.quality.contains(preferredAudioType, true) }
-                    .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it, true) } }
-                    .thenByDescending { it.quality.contains(preferredHost, true) },
+                compareByDescending<Video> { it.videoTitle.contains(preferredAudioType, true) }
+                    .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it, true) } }
+                    .thenByDescending { it.videoTitle.contains(preferredHost, true) },
             )
 
             val sortedOthers = otherVideos.sortedWith(
-                compareByDescending<Video> { it.quality.contains(preferredQuality, true) }
-                    .thenByDescending { it.quality.contains(preferredAudioType, true) }
-                    .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it, true) } }
-                    .thenByDescending { it.quality.contains(preferredHost, true) },
+                compareByDescending<Video> { it.videoTitle.contains(preferredQuality, true) }
+                    .thenByDescending { it.videoTitle.contains(preferredAudioType, true) }
+                    .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it, true) } }
+                    .thenByDescending { it.videoTitle.contains(preferredHost, true) },
             )
 
             sortedDood + sortedOthers
         } else {
             filteredVideos.sortedWith(
-                compareByDescending<Video> { it.quality.contains(preferredQuality, true) }
-                    .thenByDescending { it.quality.contains(preferredAudioType, true) }
-                    .thenByDescending { video -> qualitiesList.indexOfLast { video.quality.contains(it, true) } }
-                    .thenByDescending { it.quality.contains(preferredHost, true) },
+                compareByDescending<Video> { it.videoTitle.contains(preferredQuality, true) }
+                    .thenByDescending { it.videoTitle.contains(preferredAudioType, true) }
+                    .thenByDescending { video -> qualitiesList.indexOfLast { video.videoTitle.contains(it, true) } }
+                    .thenByDescending { it.videoTitle.contains(preferredHost, true) },
             )
         }
     }

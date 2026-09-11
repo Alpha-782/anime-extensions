@@ -19,9 +19,9 @@ import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
+import keiyoushi.utils.AnimeHttpLegacySource
 import keiyoushi.utils.appendGraphQLParams
 import keiyoushi.utils.bodyString
 import keiyoushi.utils.getPreferencesLazy
@@ -42,7 +42,7 @@ import okhttp3.Response
 import org.jsoup.Jsoup
 
 class MKissa :
-    AnimeHttpSource(),
+    AnimeHttpLegacySource(),
     ConfigurableAnimeSource {
 
     override val name = "MKissa"
@@ -406,10 +406,10 @@ class MKissa :
 
         return pList.sortedWith(
             compareBy<Pair<Video, Float>>(
-                { if (prefServer == "site_default") it.second else it.first.quality.contains(prefServer, true) },
-                { it.first.quality.contains(quality, true) },
-                { it.first.quality.contains(subPref, true) },
-                { it.first.quality.resolution() },
+                { if (prefServer == "site_default") it.second else it.first.videoTitle.contains(prefServer, true) },
+                { it.first.videoTitle.contains(quality, true) },
+                { it.first.videoTitle.contains(subPref, true) },
+                { it.first.videoTitle.resolution() },
             ).reversed(),
         ).map { t -> t.first }
     }
@@ -475,7 +475,7 @@ class MKissa :
     private fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
 
     private suspend fun fetchSourceUrls(episode: SEpisode): List<SourceUrl> {
-        val encryptionChangedError = Exception("MKissa changed its stream encryption; update the extension")
+        val encryptionChangedError = Throwable("MKissa changed its stream encryption; update the extension")
         var lastError: Throwable? = null
         var buildHealed = false
 

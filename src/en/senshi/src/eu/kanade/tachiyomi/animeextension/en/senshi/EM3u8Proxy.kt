@@ -10,6 +10,7 @@ import org.nanohttpd.protocols.http.NanoHTTPD
 import org.nanohttpd.protocols.http.response.Response
 import org.nanohttpd.protocols.http.response.Response.newFixedLengthResponse
 import org.nanohttpd.protocols.http.response.Status
+import java.net.SocketTimeoutException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -39,21 +40,13 @@ class EM3u8Proxy(
                         "Upstream error: ${res.code}",
                     )
                 }
-                // Relative URIs must resolve against the FINAL (post-redirect) URL —
-                // resolver-issued URLs redirect across CDN hosts.
                 val finalUrl = res.request.url.toString()
                 val bytes = res.body.bytes()
 
                 when {
-                    // Content sniff wins over extension: playlist URLs can lose .m3u8/.txt
-                    // across redirects; a misroute surfaces as unrewritten relative lines in
-                    // the player (subtle failure mode).
                     bytes.startsWithAscii("#EXTM3U") || isPlaylist(finalUrl) ->
                         serveManifest(bytes.toString(Charsets.UTF_8), finalUrl, audio)
 
-                    // Episode images; they require referer, which the app does not
-                    // pass. We pass them through the proxy with referer, fixing
-                    // thumbnails/preview_url.
                     else -> {
                         val mime = when {
                             finalUrl.endsWith(".jpg") || finalUrl.endsWith(".jpeg") -> "image/jpeg"
@@ -66,7 +59,7 @@ class EM3u8Proxy(
                 }
             }
         } catch (e: Exception) {
-            val status = if (e is java.net.SocketTimeoutException) Status.SERVICE_UNAVAILABLE else Status.INTERNAL_ERROR
+            val status = if (e is SocketTimeoutException) Status.SERVICE_UNAVAILABLE else Status.INTERNAL_ERROR
             newFixedLengthResponse(status, "text/plain", e.toString())
         }
     }
@@ -86,20 +79,12 @@ class EM3u8Proxy(
                     if (isPlaylist(resolved)) "URI=\"${proxyUrl(resolved)}\"" else m.value
                 }
                 isPlaylist(line) -> proxyUrl(parent.resolve(line)?.toString() ?: line)
-                else -> parent.resolve(line)?.toString() ?: line // segment: absolute, player-direct
+                else -> parent.resolve(line)?.toString() ?: line
             }
         }
         return newFixedLengthResponse(Status.OK, "application/vnd.apple.mpegurl", out)
     }
 
-    /**
-     * Keeps only the TYPE=AUDIO #EXT-X-MEDIA rendition whose URI matches [pattern]
-     * ("0_ja"/"1_en"), forcing DEFAULT=YES (explicit DEFAULT=NO is flipped;
-     * a rendition without a DEFAULT attribute is left as-is) — turns a shared
-     * both-audio stream into a single-language hoster. Falls back to the
-     * untouched manifest when the layout is unknown (no renditions / nothing
-     * matches) so audio is never lost.
-     */
     private fun filterAudioRenditions(manifest: String, pattern: String): String {
         val lines = manifest.split("\n")
         val audioMedia = lines.filter { it.trimStart().startsWith("#EXT-X-MEDIA") && "TYPE=AUDIO" in it }
@@ -111,7 +96,7 @@ class EM3u8Proxy(
             when {
                 !line.trimStart().startsWith("#EXT-X-MEDIA") || "TYPE=AUDIO" !in line -> line
                 pattern in line -> if ("DEFAULT=YES" in line) line else line.replace("DEFAULT=NO", "DEFAULT=YES")
-                else -> "" // strip the other language's audio rendition
+                else -> ""
             }
         }
     }

@@ -387,26 +387,35 @@ class Senshi :
         }
 
         val epSkip = skipTimesCache.get(episode.url)
+        val watchUrl = getEpisodeUrl(episode)
 
         fun resolve(epVal: Double?, msVal: Long?) = epVal ?: msVal?.div(1000.0)
         fun fmt(value: Double?) = value?.toString() ?: ""
 
         return embeds
-            .filter { it.remoteSourceId != null && !it.status.isNullOrBlank() }
-            // Dub & HardSub usually point at the SAME vidcloud source ("audio":
-            // "both"); the separation happens at the manifest level.
+            .filter { !it.status.isNullOrBlank() }
             .distinctBy { it.status }
             .filter { it.status !in audioExclusions }
             .map { embed ->
                 val tag = embed.status!!
+                val isDub = tag.equals("Dub", ignoreCase = true)
+                val subsList = if (isDub) embed.dubtitlesJson.orEmpty() else embed.subtitlesJson.orEmpty()
+
+                val subsEncoded = subsList.mapNotNull { sub ->
+                    val vttPath = sub.vttUrl?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                    val fullUrl = "$baseUrl${embed.basePath.orEmpty()}/$vttPath"
+                    val label = sub.html?.takeIf(String::isNotBlank) ?: "English"
+                    "$label:::$fullUrl"
+                }.joinToString(";;;")
+
                 Hoster(
                     hosterName = "[$tag]",
-                    internalData = "vidcloud::${embed.remoteSourceId}|||$tag|||" +
+                    internalData = "vidcloud::$watchUrl|||$tag|||" +
                         fmt(resolve(epSkip?.introStart, embed.introStartMs)) + "|||" +
                         fmt(resolve(epSkip?.introEnd, embed.introEndMs)) + "|||" +
                         fmt(resolve(epSkip?.outroStart, embed.outroStartMs)) + "|||" +
-                        fmt(resolve(epSkip?.outroEnd, embed.outroEndMs)) +
-                        "|||$meta.malId|||$epNum",
+                        fmt(resolve(epSkip?.outroEnd, embed.outroEndMs)) + "|||" +
+                        subsEncoded,
                 )
             }
     }
@@ -420,16 +429,17 @@ class Senshi :
         if (!hoster.internalData.startsWith("vidcloud::")) return emptyList()
 
         val parts = hoster.internalData.removePrefix("vidcloud::").split("|||")
-        val videoId = parts.getOrNull(0)?.takeIf(String::isNotBlank)?.toLongOrNull()
+        val streamUrl = parts.getOrNull(0)?.takeIf(String::isNotBlank)
             ?: return emptyList()
 
-        val entries = try {
-            keyStore.resolve(videoId)
+        val resolved = try {
+            resolver.resolve(streamUrl)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            return emptyList()
-        }
+            null
+        } ?: return emptyList()
+
         val audioTag = parts.getOrNull(1).orEmpty()
         // Rendition patterns as observed in masters: audio/0_ja, audio/1_en
         val audioRendition = if (audioTag == "Dub") "1_en" else "0_ja"
@@ -449,34 +459,26 @@ class Senshi :
             }
         }
 
-        return entries.flatMap { entry ->
-            val src = entry.source?.src?.takeUnless(String::isBlank) ?: return@flatMap emptyList()
+        val embedSubs = parts.getOrNull(6).orEmpty().split(";;;")
+            .mapNotNull { entry ->
+                val subParts = entry.split(":::")
+                if (subParts.size < 2) return@mapNotNull null
+                val label = subParts[0]
+                val subUrl = subParts[1]
+                Track(proxy.proxyUrl(subUrl), label)
+            }
 
-            val isDub = audioTag.equals("Dub", ignoreCase = true)
+        val allSubtitles = (embedSubs + resolved.subtitles)
+            .distinctBy { it.url }
 
-            val subtitles = entry.tracks
-                .filter { !it.url.isNullOrBlank() && !it.label.equals("chapter", ignoreCase = true) }
-                // Subs live on the SHARED source (Dub & HardSub point at one Vidcloud
-                // stream), so each hoster keeps only its own set.
-                .filter { track ->
-                    val isDubTrack = track.label.orEmpty().contains("dub", ignoreCase = true) ||
-                        track.url.orEmpty().contains("ai_dub")
-                    if (isDub) isDubTrack else !isDubTrack
-                }
-                .ifEmpty {
-                    entry.tracks.filter { !it.url.isNullOrBlank() && !it.label.equals("chapter", ignoreCase = true) }
-                }
-                .map { Track((it.url!!), it.label ?: "Unknown") }
-
-            playlistUtils.extractFromHls(
-                playlistUrl = proxy.proxyUrl(src) + "&audio=$audioRendition",
-                referer = "$baseUrl/",
-                masterHeaders = videoHeaders,
-                videoHeaders = videoHeaders,
-                videoNameGen = { quality -> quality },
-                subtitleList = subtitles,
-            )
-        }
+        return playlistUtils.extractFromHls(
+            playlistUrl = proxy.proxyUrl(resolved.m3u8Url) + "&audio=$audioRendition",
+            referer = "$baseUrl/",
+            masterHeaders = videoHeaders,
+            videoHeaders = videoHeaders,
+            videoNameGen = { quality -> quality },
+            subtitleList = allSubtitles,
+        )
             .map { video -> if (timestamps.isNotEmpty()) video.copy(timestamps = timestamps) else video }
             .sortedByDescending { it.videoTitle.contains(preferredQuality) }
             .mapIndexed { index, video ->
@@ -489,7 +491,7 @@ class Senshi :
     }
 
     // ========================= Proxy / Key Wiring =========================
-    private val keyStore by lazy { EM3u8KeyStore(network.client, videoHeaders) }
+    private val resolver by lazy { EM3u8Resolver(videoHeaders) }
 
     @Volatile
     private var proxyServer: EM3u8Proxy? = null

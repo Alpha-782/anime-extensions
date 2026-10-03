@@ -105,15 +105,26 @@ class EpisodeDto(
     @SerialName("created_at") val createdAt: String? = null,
 )
 
+@Serializable
+class EmbedSubtitleDto(
+    val url: String? = null,
+    val html: String? = null,
+    val default: Boolean = false,
+    @SerialName("vtt_url") val vttUrl: String? = null,
+)
+
 // =============================== Hosters ==================================
 // GET /episode-embeds/{malId}/{epNumber}
 @Serializable
 class EpisodeEmbedDto(
     val id: Int? = null, // embed row id — unused
     @SerialName("public_id") val publicId: String? = null, // uuid behind /stream/{uuid}/... — SPA iframe route, not a manifest
-    @SerialName("remote_source_id") val remoteSourceId: Int?, // Vidcloud source id
+    @SerialName("remote_source_id") val remoteSourceId: Int? = null, // Vidcloud source id
+    @SerialName("base_path") val basePath: String? = null,
     val url: String? = null, // "https://senshi.to/stream/..." — unused
     val status: String? = null,
+    @SerialName("subtitles_json") val subtitlesJson: List<EmbedSubtitleDto>? = null,
+    @SerialName("dubtitles_json") val dubtitlesJson: List<EmbedSubtitleDto>? = null,
     @SerialName("intro_start_ms") val introStartMs: Long? = null,
     @SerialName("intro_end_ms") val introEndMs: Long? = null,
     @SerialName("outro_start_ms") val outroStartMs: Long? = null,

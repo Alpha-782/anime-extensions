@@ -8,16 +8,18 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimeUpdateStrategy
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
+import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import keiyoushi.network.rateLimit
-import keiyoushi.utils.AnimeHttpLegacySource
 import keiyoushi.utils.addListPreference
 import keiyoushi.utils.addSwitchPreference
+import keiyoushi.utils.get
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parallelCatchingFlatMap
 import keiyoushi.utils.parseAs
@@ -35,14 +37,14 @@ import kotlin.collections.associate
 import kotlin.collections.isNotEmpty
 
 class Anikage :
-    AnimeHttpLegacySource(),
+    AnimeHttpSource(),
     ConfigurableAnimeSource {
 
     override val baseUrl: String = "https://anikage.cc"
 
     override val lang: String = "en"
 
-    override val supportsLatest: Boolean = true
+    override val supportsLatest = true
 
     override val disableRelatedAnimesBySearch = true
 
@@ -58,14 +60,9 @@ class Anikage :
 
     private val preferences by getPreferencesLazy()
 
-    /**
-     * The neko provider serves AniNeko streams whose segments are wrapped
-     * in a fake PNG header, so they must pass through a local proxy that
-     * strips it before playback.
-     */
-    private val localProxy by lazy { LocalProxy(client) }
-
     // ============================== Popular ===============================
+
+    override suspend fun getPopularAnime(page: Int): AnimesPage = parseAnime(client.newCall(popularAnimeRequest(page)).awaitSuccess())
 
     override fun popularAnimeRequest(page: Int): Request {
         val requestUrl = ANIKAGE_API_URL
@@ -80,9 +77,11 @@ class Anikage :
         return buildGet(requestUrl.build())
     }
 
-    override fun popularAnimeParse(response: Response) = parseAnime(response)
+    override fun popularAnimeParse(response: Response): AnimesPage = throw UnsupportedOperationException()
 
     // =============================== Latest ===============================
+
+    override suspend fun getLatestUpdates(page: Int): AnimesPage = parseAnime(client.newCall(latestUpdatesRequest(page)).awaitSuccess())
 
     override fun latestUpdatesRequest(page: Int): Request {
         val requestUrl = ANIKAGE_API_URL
@@ -97,11 +96,42 @@ class Anikage :
         return buildGet(requestUrl.build())
     }
 
-    override fun latestUpdatesParse(response: Response) = parseAnime(response)
+    override fun latestUpdatesParse(response: Response): AnimesPage = throw UnsupportedOperationException()
 
     // =============================== Search ===============================
 
     override fun getFilterList(): AnimeFilterList = Filters.FILTER_LIST
+
+    override suspend fun getSearchAnime(
+        page: Int,
+        query: String,
+        filters: AnimeFilterList,
+    ): AnimesPage {
+        if (query.startsWith("https://")) {
+            val url = query.toHttpUrl()
+            if (url.host != baseUrl.toHttpUrl().host) {
+                throw Exception("Unsupported url")
+            }
+            val segments = url.pathSegments
+            val slug = when {
+                segments.size >= 3 &&
+                    segments[0] == "anime" &&
+                    segments[1] == "info" -> segments[2]
+                else -> null
+            } ?: throw Exception("Unsupported url")
+            return getSearchAnime(page, "${PREFIX_SEARCH}$slug", filters)
+        }
+
+        if (query.startsWith(PREFIX_SEARCH)) {
+            val slug = query.removePrefix(PREFIX_SEARCH)
+            val details = getAnimeDetails(
+                SAnime.create().apply { url = "/anime/info/$slug" },
+            )
+            return AnimesPage(listOf(details), false)
+        }
+
+        return parseAnime(client.newCall(searchAnimeRequest(page, query, filters)).awaitSuccess())
+    }
 
     override fun searchAnimeRequest(
         page: Int,
@@ -126,8 +156,8 @@ class Anikage :
         if (searchParams.origin != "ALL") {
             requestUrl.addQueryParameter("country", searchParams.origin)
         }
-        if (searchParams.types != "ALL") {
-            requestUrl.addQueryParameter("format", searchParams.types)
+        if (searchParams.format != "ALL") {
+            requestUrl.addQueryParameter("format", searchParams.format)
         }
         if (searchParams.releaseYear != "ALL") {
             requestUrl.addQueryParameter("yearMin", searchParams.releaseYear)
@@ -136,6 +166,28 @@ class Anikage :
         if (searchParams.genres.isNotEmpty()) {
             requestUrl.addQueryParameter("genres", searchParams.genres.joinToString(","))
         }
+        if (searchParams.tags.isNotEmpty()) {
+            requestUrl.addQueryParameter("tags", searchParams.tags.joinToString(","))
+        }
+        if (searchParams.source != "ALL") {
+            requestUrl.addQueryParameter("source", searchParams.source)
+        }
+        if (searchParams.scoreMin != "ALL") {
+            requestUrl.addQueryParameter("scoreMin", searchParams.scoreMin)
+        }
+        if (searchParams.episodes != "ALL") {
+            val parts = searchParams.episodes.split("-")
+            if (parts.isNotEmpty()) {
+                requestUrl.addQueryParameter("epMin", parts[0])
+                if (parts.size > 1 && parts[1].isNotEmpty()) {
+                    requestUrl.addQueryParameter("epMax", parts[1])
+                }
+            }
+        }
+        when (searchParams.audio) {
+            "sub" -> requestUrl.addQueryParameter("sub", "true")
+            "dub" -> requestUrl.addQueryParameter("dub", "true")
+        }
         if (preferences.isAdult) {
             requestUrl.addQueryParameter("adult", true.toString())
         }
@@ -143,7 +195,7 @@ class Anikage :
         return buildGet(requestUrl.build())
     }
 
-    override fun searchAnimeParse(response: Response): AnimesPage = parseAnime(response)
+    override fun searchAnimeParse(response: Response): AnimesPage = throw UnsupportedOperationException()
 
     // =========================== Anime Details ============================
 
@@ -153,6 +205,8 @@ class Anikage :
         val animeId = anime.url.removeSuffix("/").substringAfterLast("/")
         return buildGet("$baseUrl/api/media/anime/$animeId".toHttpUrl())
     }
+
+    override suspend fun getAnimeDetails(anime: SAnime): SAnime = animeDetailsParse(client.newCall(animeDetailsRequest(anime)).awaitSuccess())
 
     override fun animeDetailsParse(response: Response): SAnime {
         val info = response.parseAs<AnimeInfoResponse>().anime
@@ -193,6 +247,8 @@ class Anikage :
         return buildGet("$baseUrl/api/media/anime/$animeId".toHttpUrl())
     }
 
+    override suspend fun fetchRelatedAnimeList(anime: SAnime): List<SAnime> = relatedAnimeListParse(client.newCall(relatedAnimeListRequest(anime)).awaitSuccess())
+
     override fun relatedAnimeListParse(response: Response): List<SAnime> {
         val info = response.parseAs<AnimeInfoResponse>().anime
         val currentSlug = info.slug
@@ -207,6 +263,7 @@ class Anikage :
             "FINISHED" -> SAnime.COMPLETED
             "RELEASING" -> SAnime.ONGOING
             "CANCELLED" -> SAnime.CANCELLED
+            "HIATUS" -> SAnime.ON_HIATUS
             else -> SAnime.UNKNOWN
         }
 
@@ -246,12 +303,12 @@ class Anikage :
     override fun episodeListRequest(anime: SAnime): Request {
         val animeId = anime.url.removeSuffix("/").substringAfterLast("/")
         val getHeaders = headersBuilder()
-            .add("Referer", "$baseUrl${anime.url}")
-            .add("Origin", baseUrl)
-            .add("Accept", "*/*")
-            .add("Sec-Fetch-Site", "same-origin")
-            .add("Sec-Fetch-Mode", "cors")
-            .add("Sec-Fetch-Dest", "empty")
+            .set("Referer", "$baseUrl${anime.url}")
+            .set("Origin", baseUrl)
+            .set("Accept", "*/*")
+            .set("Sec-Fetch-Site", "same-origin")
+            .set("Sec-Fetch-Mode", "cors")
+            .set("Sec-Fetch-Dest", "empty")
             .build()
 
         return GET(animeId.animeEpisodeBuilder(), headers = getHeaders)
@@ -267,11 +324,24 @@ class Anikage :
         val episode = episodesData.reversed().map {
             SEpisode.create().apply {
                 episode_number = it.number.toFloat()
-                name = if (!it.title.isNullOrBlank()) {
-                    "Episode ${it.number} - ${it.title}"
-                } else {
-                    "Episode ${it.number}"
+                name = buildString {
+                    append("Episode ${it.number}")
+                    if (!it.title.isNullOrBlank()) {
+                        append(" - ${it.title}")
+                    }
+                    // Surface recap status in the title — there's no
+                    // recapMark field on SEpisode, so this is the only
+                    // way to flag it. (Filler is handled by fillermark
+                    // below and shown via the player UI's own badge.)
+                    if (it.isRecap) append(" (Recap)")
                 }
+                // Rich metadata from the API — previously dropped.
+                summary = it.description
+                preview_url = it.image
+                // fillermark lets the player auto-skip filler episodes in
+                // supported viewing modes; the UI shows its own badge
+                // from this, no need to pollute the title.
+                fillermark = it.isFiller
                 date_upload = DATE_FORMAT.tryParse(it.airDate)
                 setUrlWithoutDomain(
                     animeEpisodeUrlFormat(
@@ -284,11 +354,23 @@ class Anikage :
         return episode
     }
 
-    // =========================== Video Links ==============================
+    override fun getEpisodeUrl(episode: SEpisode): String = "$baseUrl${episode.url}"
 
-    private fun videoListRequestUrl(episode: SEpisode, lang: String, provider: String): String = "$baseUrl${episode.url}?lang=$lang&provider=$provider"
+    // =============================== Hosters =============================
 
-    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+    /**
+     * Build the list of available hosters for this episode. Each Hoster is
+     * a (audioType, provider) pair packaged as a self-contained URL — the
+     * /sources endpoint with `?lang={type}&provider={provider}` query.
+     *
+     * The framework picks one (or all) hosters and feeds each to
+     * [getVideoList] which actually extracts playable Video streams.
+     *
+     * Hosters are built from the /servers endpoint's response. Servers
+     * carrying a `urls` field are embed-style (e.g. kage → vidcloud.se)
+     * and are skipped — extracting them is out of scope.
+     */
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
         val isDubPreferred = preferences.subOrDub == "dub"
         val primaryLabel = if (isDubPreferred) "Dub" else "Sub"
         val secondaryLabel = if (isDubPreferred) "Sub" else "Dub"
@@ -298,66 +380,122 @@ class Anikage :
         val primaryProviders = SUB_PROVIDER.sortedByDescending { it.contains(preferredSource) }
         val secondaryProviders = DUB_PROVIDER.sortedByDescending { it.contains(otherSource) }
 
-        val providers = getEpisodeServers(episode)
-            .takeIf { it.isNotEmpty() }
-            ?.associate { it.providerId to it.subTypes }
-            ?.let { availability ->
-                primaryProviders.filter { availability[it].orEmpty().contains(primaryLabel.lowercase()) }
-                    .map { primaryLabel to it } +
-                    secondaryProviders.filter { availability[it].orEmpty().contains(secondaryLabel.lowercase()) }
-                        .map { secondaryLabel to it }
-            }
-            ?: (primaryProviders.map(primaryLabel::to) + secondaryProviders.map(secondaryLabel::to))
+        val servers = getEpisodeServers(episode)
+
+        val providers = if (servers.isNotEmpty()) {
+            // Use the API-returned server list directly so newly-added
+            // providers automatically work without an extension update.
+            // Skip servers that carry a `urls` field — those are embed-style
+            // (e.g. kage → vidcloud.se) and require an HTML extractor we
+            // don't ship.
+            val streamable = servers.filter { it.urls == null }
+            val availability = streamable.associate { it.providerId to it.subTypes }
+            val apiProviders = streamable
+                .map { it.providerId }
+                .distinct()
+                .sortedByDescending { it.contains(preferredSource) }
+
+            // Group: all primary-label options first, then all secondary-label
+            // (matches the original behavior so video sorting downstream
+            // still works the same way).
+            val primary = apiProviders.filter {
+                availability[it].orEmpty().contains(primaryLabel.lowercase())
+            }.map { primaryLabel to it }
+            val secondary = apiProviders.filter {
+                availability[it].orEmpty().contains(secondaryLabel.lowercase())
+            }.map { secondaryLabel to it }
+            primary + secondary
+        } else {
+            // Fallback when /servers endpoint fails entirely: use the
+            // hardcoded list with no availability info (best-effort).
+            primaryProviders.map(primaryLabel::to) + secondaryProviders.map(secondaryLabel::to)
+        }
 
         val excludedServers = preferences.excludedServers
-        val excludedTypes = preferences.excludedTypes
-        val activeProviders = providers.filter { it.second !in excludedServers }
+        return providers
+            .filter { (_, provider) -> provider !in excludedServers }
+            .map { (type, provider) ->
+                Hoster(
+                    hosterUrl = videoListRequestUrl(episode, type.lowercase(), provider),
+                    hosterName = "$type - $provider",
+                )
+            }
+    }
 
+    override fun hosterListParse(response: Response): List<Hoster> = throw UnsupportedOperationException()
+
+    override fun List<Hoster>.sortHosters(): List<Hoster> {
+        val isDubPreferred = preferences.subOrDub == "dub"
+        val preferredSource = if (isDubPreferred) preferences.dubSource else preferences.subSource
+        val primaryType = if (isDubPreferred) "Dub" else "Sub"
+        return sortedWith(
+            compareByDescending<Hoster> { it.hosterName.contains(preferredSource, ignoreCase = true) }
+                .thenByDescending { it.hosterName.contains(primaryType, ignoreCase = true) },
+        )
+    }
+
+    // ============================== Videos ===============================
+
+    private fun videoListRequestUrl(episode: SEpisode, lang: String, provider: String): String = "$baseUrl${episode.url}?lang=$lang&provider=$provider"
+
+    private fun forceMpegTs(video: Video): Video = video.copy(
+        mpvArgs = video.mpvArgs.filterNot { it.first == "demuxer-lavf-o" } +
+            ("demuxer-lavf-o" to "force_mpegts=1"),
+        ffmpegStreamArgs = video.ffmpegStreamArgs.filterNot { it.first == "force_mpegts" } +
+            ("force_mpegts" to "1"),
+    )
+
+    /**
+     * Extract playable Videos from a single Hoster. The hosterName is
+     * formatted as "{type} - {provider}" (e.g. "Sub - koto") so we can
+     * recover the audio type and provider ID for proper labelling and
+     * the neko-specific LocalProxy routing.
+     */
+    override suspend fun getVideoList(hoster: Hoster): List<Video> {
         val playlistUtils = PlaylistUtils(client, headers)
+        val excludedTypes = preferences.excludedTypes
 
-        return activeProviders.parallelCatchingFlatMap { (type, provider) ->
-            val episodeData = client.newCall(
-                GET(videoListRequestUrl(episode, type.lowercase(), provider), headers),
-            )
-                .awaitSuccess()
-                .parseAs<EpisodeSource>()
+        // Recover the provider from the hoster name.
+        val provider = hoster.hosterName.substringAfter(" - ")
 
-            val tracks = episodeData.subtitles.map {
-                Track("https://og.bakayaro.live/stream/${it.file}", it.label)
-            }
+        val episodeData = client.get(hoster.hosterUrl)
+            .parseAs<EpisodeSource>()
 
-            val videos = episodeData.sources.parallelCatchingFlatMap { source ->
-                val videoUrl = source.episodeSourceUrl()
-                if (source.isM3U8 == true) {
-                    val effectiveUrl = if (provider == "neko") {
-                        localProxy.getProxyUrl(videoUrl, headers)
-                    } else {
-                        videoUrl
-                    }
-                    playlistUtils.extractFromHls(
-                        playlistUrl = effectiveUrl,
-                        masterHeaders = headers,
-                        videoHeaders = headers,
-                        videoNameGen = { "$type - $provider - ${source.quality} - $it" },
-                        subtitleList = tracks,
-                    )
-                } else {
-                    Video(
-                        url = videoUrl,
-                        quality = "$type - $provider - ${source.quality}",
-                        videoUrl = videoUrl,
-                        subtitleTracks = tracks,
-                        headers = headers,
-                    ).let(::listOf)
-                }
-            }
-
-            videos
+        val tracks = episodeData.subtitles.map {
+            Track("https://og.bakayaro.live/stream/${it.file}", it.label)
         }
-            .filterNot { video ->
-                val videoType = video.videoTitle.substringBefore(" - ")
-                excludedTypes.any { videoType.equals(it, ignoreCase = true) }
+
+        val vidHeaders = headers.newBuilder()
+            .set("Referer", "$baseUrl/")
+            .set("Origin", baseUrl)
+            .set("Sec-Fetch-Site", "cross-site")
+            .set("Accept", "*/*")
+            .build()
+
+        val videos = episodeData.sources.parallelCatchingFlatMap { source ->
+            val videoUrl = source.episodeSourceUrl()
+            if (source.isM3U8 == true) {
+                playlistUtils.extractFromHls(
+                    playlistUrl = videoUrl,
+                    masterHeaders = vidHeaders,
+                    videoHeaders = vidHeaders,
+                    videoNameGen = { "${source.quality} - $it" },
+                    subtitleList = tracks,
+                )
+            } else {
+                Video(
+                    videoUrl = videoUrl,
+                    videoTitle = source.quality,
+                    subtitleTracks = tracks,
+                    headers = vidHeaders,
+                ).let(::listOf)
             }
+        }.map(::forceMpegTs)
+
+        return videos.filterNot { video ->
+            val videoType = video.videoTitle.substringBefore(" - ")
+            excludedTypes.any { videoType.equals(it, ignoreCase = true) }
+        }
     }
 
     override fun List<Video>.sortVideos(): List<Video> {
@@ -385,16 +523,17 @@ class Anikage :
         )
     }
 
+    override fun seasonListParse(response: Response): List<SAnime> = throw UnsupportedOperationException()
+
     private fun serversListUrl(episode: SEpisode): String = "$baseUrl${episode.url}".substringBefore("/sources") + "/servers"
 
     private suspend fun getEpisodeServers(episode: SEpisode): List<ServerInfo> = try {
-        client.newCall(GET(serversListUrl(episode), headers))
-            .awaitSuccess()
+        client.get(serversListUrl(episode))
             .parseAs<EpisodeServers>()
             .servers
     } catch (e: CancellationException) {
         throw e
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         emptyList()
     }
 
@@ -556,15 +695,15 @@ class Anikage :
         private val ANIKAGE_API_URL by lazy { ANIKAGE_API.toHttpUrl() }
         private const val PREF_ADULT_KEY = "nsfw"
         private const val PREF_ADULT_DEFAULT = false
+        private const val PREFIX_SEARCH = "id:"
 
         private val provider = listOf(
             "koto",
-            "neko",
-            "uwu",
-            "kiwi",
+            "kite",
+            "ken",
             "megg",
-            "dib",
             "wave",
+            "zen",
         )
         private val SUB_PROVIDER = provider
         private val DUB_PROVIDER = provider

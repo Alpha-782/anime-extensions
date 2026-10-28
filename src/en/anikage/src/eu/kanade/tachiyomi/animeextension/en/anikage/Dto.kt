@@ -146,6 +146,7 @@ data class ServerInfo(
     val providerId: String,
     val default: Boolean = false,
     val subTypes: List<String> = emptyList(),
+    val urls: Map<String, String>? = null,
 )
 
 @Serializable
@@ -162,10 +163,10 @@ data class EmbedOptions(
 
 @Serializable
 data class EpisodeSource(
-    val slug: String,
-    val number: Int,
-    val providerId: String,
-    val subType: String,
+    val slug: String? = null,
+    val number: Int? = null,
+    val providerId: String? = null,
+    val subType: String? = null,
     val sources: List<SourceData> = emptyList(),
     val subtitles: List<SubtitleData> = emptyList(),
     val embeds: List<Embed>? = null,
@@ -173,8 +174,8 @@ data class EpisodeSource(
     val outro: TimeStamp? = null,
     val headers: Map<String, String> = emptyMap(),
     val embedOptions: List<EmbedOptions>? = null,
-    val cached: Boolean,
-    val stale: Boolean,
+    val cached: Boolean = false,
+    val stale: Boolean = false,
 )
 
 @Serializable
@@ -184,6 +185,7 @@ data class SourceData(
     val isM3U8: Boolean? = null,
     val embedUrl: String? = null,
     val type: String?,
+    val label: String? = null,
 ) {
     fun episodeSourceUrl(): String = listOfNotNull(
         "https://og.bakayaro.live",
@@ -212,4 +214,25 @@ data class Embed(
 data class TimeStamp(
     val start: Int,
     val end: Int,
+)
+
+@Serializable
+data class MegaPlaySourcesDto(
+    val enc: String? = null,
+    val sources: String? = null,
+    val tracks: List<MegaPlayTrackDto>? = null,
+    val intro: MegaPlaySkipDto? = null,
+    val outro: MegaPlaySkipDto? = null,
+)
+
+@Serializable
+data class MegaPlayTrackDto(
+    val file: String,
+    val label: String,
+)
+
+@Serializable
+data class MegaPlaySkipDto(
+    val start: Int = 0,
+    val end: Int = 0,
 )

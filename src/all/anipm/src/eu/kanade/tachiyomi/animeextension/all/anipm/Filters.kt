@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.animeextension.en.anipm
+package eu.kanade.tachiyomi.animeextension.all.anipm
 
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
@@ -10,9 +10,51 @@ object Filters {
     class SortFilter : AnimeFilter.Select<String>("Sort", SORT_ENTRIES, 1) {
         fun getValue(): String = SORT_VALUES[state]
         companion object {
-            private val SORT_ENTRIES = arrayOf("For you", "Trending", "Popular", "Top rated", "MAL rating", "Newest", "A–Z")
-            private val SORT_VALUES = arrayOf("recommended", "trending", "popular", "score", "mal", "newest", "title")
+            private val SORT_ENTRIES = arrayOf("For you", "Trending", "Popular", "Top rated", "MAL rating", "Newest", "A–Z", "Hard Sub", "Hard Dub")
+            private val SORT_VALUES = arrayOf("recommended", "trending", "popular", "score", "mal", "newest", "title", "hardsub", "harddub")
         }
+    }
+
+    class VersionFilter :
+        TriStateValueGroup(
+            "Versions",
+            listOf("Sub", "Dub", "Hard Sub", "Hard Dub", "Sub Only", "Dub Only", "Raw"),
+        ) {
+        fun getIncludedVersions(): List<String> = getIncluded().map(VERSION_VALUES::getValue)
+
+        fun getExcludedVersions(): List<String> = getExcluded().map(VERSION_VALUES::getValue)
+
+        companion object {
+            private val VERSION_VALUES = mapOf(
+                "Sub" to "sub",
+                "Dub" to "dub",
+                "Hard Sub" to "hardsub",
+                "Hard Dub" to "harddub",
+                "Sub Only" to "subonly",
+                "Dub Only" to "dubonly",
+                "Raw" to "raw",
+            )
+        }
+    }
+
+    class ServerFilter : AnimeFilter.Select<String>("Server", SERVER_ENTRIES, 0) {
+        fun getValue(): String? = SERVER_VALUES[state]
+        companion object {
+            private val SERVER_ENTRIES = arrayOf("Any", "Default", "Beta", "On both", "Default only", "Beta only")
+            private val SERVER_VALUES = arrayOf(null, "default", "beta", "both", "defaultonly", "betaonly")
+        }
+    }
+
+    class OrderFilter : AnimeFilter.Select<String>("Order", ORDER_ENTRIES, 0) {
+        fun getValue(): String? = ORDER_VALUES[state]
+        companion object {
+            private val ORDER_ENTRIES = arrayOf("Normal", "Reversed")
+            private val ORDER_VALUES = arrayOf(null, "asc")
+        }
+    }
+
+    class EpisodeRangeFilter : AnimeFilter.Text("Episode range (e.g. 2-12)") {
+        fun getValue(): String? = state.trim().takeIf { it.isNotEmpty() }
     }
 
     class FormatFilter : AnimeFilter.Select<String>("Format", FORMAT_ENTRIES, 0) {
@@ -49,14 +91,6 @@ object Filters {
         }
     }
 
-    class LanguageFilter : AnimeFilter.Select<String>("Language", AUDIO_ENTRIES, 0) {
-        fun getValue(): String? = AUDIO_VALUES[state]
-        companion object {
-            private val AUDIO_ENTRIES = arrayOf("Any", "Sub", "Dub")
-            private val AUDIO_VALUES = arrayOf(null, "sub", "dub")
-        }
-    }
-
     // ========================= Checkbox groups =========================
 
     /** Group of TriState boxes: tap cycles ignore → include → exclude (site-native semantics). */
@@ -84,6 +118,10 @@ object Filters {
 
         return AnimeFilterList(
             SortFilter(),
+            VersionFilter(),
+            ServerFilter(),
+            EpisodeRangeFilter(),
+            OrderFilter(),
             if (genres.isEmpty()) hint else GenreFilter(genres),
             if (tags.isEmpty()) hint else TagFilter(tags),
             if (studios.isEmpty()) hint else StudioFilter(studios),
@@ -91,7 +129,6 @@ object Filters {
             SeasonFilter(),
             FormatFilter(),
             StatusFilter(),
-            LanguageFilter(),
         )
     }
 }

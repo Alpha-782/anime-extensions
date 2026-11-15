@@ -1,4 +1,4 @@
-package eu.kanade.tachiyomi.animeextension.en.anipm
+package eu.kanade.tachiyomi.animeextension.all.anipm
 
 import okhttp3.ConnectionPool
 import okhttp3.Headers

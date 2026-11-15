@@ -1,6 +1,6 @@
-package eu.kanade.tachiyomi.animeextension.en.anipm
+package eu.kanade.tachiyomi.animeextension.all.anipm
 
-import eu.kanade.tachiyomi.animeextension.en.anipm.AniPM.Companion.parseStatus
+import eu.kanade.tachiyomi.animeextension.all.anipm.AniPM.Companion.parseStatus
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import keiyoushi.utils.longOrNull
 import kotlinx.serialization.KSerializer
@@ -127,6 +127,7 @@ class SeriesResponseDto(
     val startDate: FuzzyDateDto? = null,
     val dubLag: DubLagDto? = null,
     val routeId: String? = null,
+    val betaOnly: Boolean = false,
 ) {
     private fun getFancyScore(score: Double): String {
         if (score <= 0.0) return ""
@@ -263,12 +264,13 @@ class SeriesEpisodeDto(
     val title: String? = null,
     val thumbnail: String? = null,
     val description: String? = null,
-    val sub: Boolean = false,
-    val dub: Boolean = false,
-    val subhard: Boolean = false,
-    val dubhard: Boolean = false,
-    val subExact: Boolean = false,
-    val dubExact: Boolean = false,
+    // Beta-only/raw episodes send explicit JSON nulls for unavailable channels
+    val sub: Boolean? = null,
+    val dub: Boolean? = null,
+    val subhard: Boolean? = null,
+    val dubhard: Boolean? = null,
+    val subExact: Boolean? = null,
+    val dubExact: Boolean? = null,
     val runtimeSeconds: Long? = null,
     val aired: String? = null,
     val runtime: Int? = null,
@@ -336,6 +338,55 @@ class BootstrapDto(
     val settlarSelection: String? = null,
     val episodeRouteId: String? = null,
     val anipmPackages: AniPMPackagesDto? = null,
+    val backupEmbed: BackupEmbedDto? = null,
+)
+
+@Serializable
+class BackupEmbedDto(
+    val available: Boolean = false,
+    val reason: String? = null,
+    val url: String? = null,
+    val direct: BackupDirectDto? = null,
+    val episode: Int? = null,
+    val language: String? = null,
+)
+
+@Serializable
+class BackupDirectDto(
+    val stream: String? = null,
+)
+
+@Serializable
+class BetaServerDto(
+    val available: Boolean = false,
+    val audio: List<String> = emptyList(),
+    val subs: List<String> = emptyList(),
+    val episodes: List<Int> = emptyList(),
+    val episodeLangs: BetaEpisodeLangsDto? = null,
+)
+
+/** Maps episode ranges to the audio/subtitle language sets served for them. */
+@Serializable
+class BetaEpisodeLangsDto(
+    val runs: List<List<Int>> = emptyList(),
+    val sets: List<List<List<String>>> = emptyList(),
+) {
+    /** `[audioLangs, subLangs]` pair covering [episode], or null. */
+    fun langsFor(episode: Int): Pair<List<String>, List<String>>? {
+        val run = runs.firstOrNull { run ->
+            val start = run.getOrNull(0) ?: return@firstOrNull false
+            val end = run.getOrNull(1) ?: return@firstOrNull false
+            episode in start..end
+        } ?: return null
+        val set = sets.getOrNull(run.getOrNull(2) ?: -1) ?: return null
+        return set.getOrNull(0).orEmpty() to set.getOrNull(1).orEmpty()
+    }
+}
+
+@Serializable
+class BetaCopyDto(
+    val player: String? = null,
+    val expires: Long? = null,
 )
 
 @Serializable
@@ -350,6 +401,8 @@ class AniPMEpisodePackageDto(
     val dub: Boolean = false,
     val subhard: Boolean = false,
     val dubhard: Boolean = false,
+    val subOwn: Boolean = false,
+    val dubOwn: Boolean = false,
 )
 
 @Serializable
@@ -390,6 +443,10 @@ class EmbedSubtitleDto(
     val url: String? = null,
     val label: String? = null,
     val srclang: String? = null,
+    val default: Boolean = false,
+    val autoSelect: Boolean = false,
+    val pick: String? = null,
+    val assUrl: String? = null,
 )
 
 // ============================ Helpers ============================

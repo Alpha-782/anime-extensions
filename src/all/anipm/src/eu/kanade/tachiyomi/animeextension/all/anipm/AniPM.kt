@@ -1,9 +1,8 @@
-package eu.kanade.tachiyomi.animeextension.en.anipm
+package eu.kanade.tachiyomi.animeextension.all.anipm
 
 import android.content.SharedPreferences
-import androidx.preference.MultiSelectListPreference
+import android.util.Log
 import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
 import aniyomi.lib.playlistutils.PlaylistUtils
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
@@ -17,10 +16,11 @@ import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
-import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.utils.addListPreference
-import keiyoushi.utils.get
+import keiyoushi.utils.addSetPreference
+import keiyoushi.utils.addSwitchPreference
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.tryParse
@@ -38,10 +38,17 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-@Source
-abstract class AniPM :
+class AniPM(private val config: LangConfig) :
     AnimeHttpSource(),
     ConfigurableAnimeSource {
+
+    override val name: String get() = "AniPM"
+
+    override val lang: String get() = config.lang
+
+    override val baseUrl: String = "https://ani.pm"
+
+    private val dubLang: String? get() = config.dubLang
 
     override val supportsLatest = true
 
@@ -78,7 +85,11 @@ abstract class AniPM :
     private fun catalogUrl(page: Int) = "$apiUrl/anime/catalog".toHttpUrl().newBuilder()
         .addQueryParameter("page", page.toString())
         .addQueryParameter("limit", PAGE_SIZE.toString())
-        .apply { if (hideAdult) addQueryParameter("sfw", "1") }
+        .apply {
+            addQueryParameter("beta", "1")
+            if (hideAdult) addQueryParameter("sfw", "1")
+            dubLang?.let { addQueryParameter("dublang", it) }
+        }
 
     override fun popularAnimeRequest(page: Int): Request = GET(catalogUrl(page).addQueryParameter("sort", "popular").build(), apiHeaders())
 
@@ -90,11 +101,17 @@ abstract class AniPM :
         filters.forEach { f ->
             when (f) {
                 is Filters.SortFilter -> f.getValue().let { url.addQueryParameter("sort", it) }
+                is Filters.VersionFilter -> {
+                    f.getIncludedVersions().forEach { url.addQueryParameter("ver", it) }
+                    f.getExcludedVersions().forEach { url.addQueryParameter("excludeVer", it) }
+                }
+                is Filters.ServerFilter -> f.getValue()?.let { url.addQueryParameter("server", it) }
+                is Filters.EpisodeRangeFilter -> f.getValue()?.let { url.addQueryParameter("eps", it) }
+                is Filters.OrderFilter -> f.getValue()?.let { url.addQueryParameter("order", it) }
                 is Filters.FormatFilter -> f.getValue()?.let { url.addQueryParameter("format", it) }
                 is Filters.StatusFilter -> f.getValue()?.let { url.addQueryParameter("status", it) }
                 is Filters.SeasonFilter -> f.getValue()?.let { url.addQueryParameter("season", it) }
                 is Filters.YearFilter -> f.getValue()?.let { url.addQueryParameter("year", it) }
-                is Filters.LanguageFilter -> f.getValue()?.let { url.addQueryParameter("audio", it) }
 
                 is Filters.GenreFilter -> {
                     f.getIncluded().forEach { url.addQueryParameter("genre", it) }
@@ -308,9 +325,9 @@ abstract class AniPM :
                 preview_url = episodePreviewUrl(baseUrl, dto.source, dto.anilistId, dto.routeId, numStr, ep.thumbnail)
                 fillermark = ep.number in fillerSet
                 scanlator = when {
-                    ep.sub && ep.dub -> "Sub & Dub"
-                    ep.sub -> "Sub"
-                    ep.dub -> "Dub"
+                    ep.sub == true && ep.dub == true -> "Sub & Dub"
+                    ep.sub == true -> "Sub"
+                    ep.dub == true -> "Dub"
                     else -> null
                 }
                 date_upload = dateFormat.tryParse(ep.aired)
@@ -332,6 +349,36 @@ abstract class AniPM :
 
     override fun seasonListParse(response: Response) = throw UnsupportedOperationException()
 
+    // ============================ Beta Server =============================
+    @Volatile
+    private var betaMemo: Pair<Long, BetaServerDto>? = null
+
+    /** Beta server info for a settlar title (keyed by AniList id). */
+    private suspend fun fetchBetaServer(anilistId: Long?): BetaServerDto? {
+        val aid = anilistId?.takeIf { it in 1..<syntheticAniListBase } ?: return null
+        betaMemo?.takeIf { it.first == aid }?.let { return it.second }
+
+        return try {
+            val res = client.get("$apiUrl/anime/beta-server/$aid", apiHeaders())
+            val dto = res.use { it.parseAs<BetaServerDto>() }
+            if (dto.available) betaMemo = aid to dto
+            dto.takeIf { it.available }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+    }
+
+    private fun BetaServerDto.coversEpisode(anilistId: Long, episode: Double, audio: String?): Boolean {
+        val ep = episode.toInt()
+        if (episodes.isNotEmpty() && ep !in episodes) return false
+        if (audio != null) {
+            val langs = episodeLangs?.langsFor(ep) ?: return audio in this.audio
+            return audio in langs.first
+        }
+        return true
+    }
+
     // ============================== Hosters ===============================
     override suspend fun getHosterList(episode: SEpisode): List<Hoster> {
         val handle = episode.url.substringBefore('/')
@@ -340,33 +387,79 @@ abstract class AniPM :
         val ep = dto.episodes.firstOrNull { fmtNum(it.number) == epNum }
             ?: return emptyList()
 
-        val provider = dto.source?.takeIf(String::isNotBlank) ?: "settlar"
-
-        val bootPackage = try {
-            val boot = fetchBootstrap(provider, dto.id.toString(), epNum, "sub")
-            val epKey = fmtNum(ep.number)
-            boot.anipmPackages?.episodes?.get(epKey)
-        } catch (_: Exception) {
-            null
+        // The bootstrap always rides the settlar provider (the anilist one
+        // 404s for every title) and accepts any family handle (slug, set-,
+        // ani-), so internalData carries the family-stable handle: /ani/
+        // slugs must resolve through the ani endpoint, not /series/ (the
+        // numeric tails collide with settlar ids and return wrong titles).
+        // Titles with an AniList id bootstrap through the anilist provider with
+        // an ani-<id> handle (also the only path that unlocks their backup
+        // embed); beta-only titles 404 there, so fetchBootstrap falls back to
+        // the settlar slug. Titles without an AniList id use settlar directly.
+        val aniHandle = dto.anilistId?.toLongOrNull()
+            ?.takeIf { it in 1..<syntheticAniListBase }
+            ?.let { "ani-$it" }
+        val (bootProvider, bootHandle) = if (aniHandle != null) {
+            "anilist" to aniHandle
+        } else {
+            "settlar" to (dto.routeId?.takeIf(String::isNotBlank) ?: dto.id.toString())
         }
 
-        val hasSub = bootPackage?.sub ?: ep.sub
-        val hasSubhard = bootPackage?.subhard ?: ep.subhard
-        val hasDub = bootPackage?.dub ?: ep.dub
-        val hasDubhard = bootPackage?.dubhard ?: ep.dubhard
+        val bootLang = if (preferredAudio.startsWith("dub")) "dub" else "sub"
+        val boot = try {
+            fetchBootstrap(bootProvider, bootHandle, epNum, bootLang)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            // Expected for beta-only titles: no bootstrap exists on any provider
+            Log.d(TAG, "Bootstrap unavailable (beta-only titles have none): ${e.message}")
+            null
+        }
+        val bootPackage = boot?.anipmPackages?.episodes?.get(fmtNum(ep.number))
+        val backupEmbed = boot?.backupEmbed
+        if (backupEmbed != null && !backupEmbed.available) {
+            Log.e(TAG, "Backup unavailable: ${backupEmbed.reason} (lang=$bootLang, episode=${backupEmbed.episode})")
+        }
+
+        val hasSub = bootPackage?.sub ?: (ep.sub == true)
+        val hasSubhard = bootPackage?.subhard ?: (ep.subhard == true)
+        val hasDub = bootPackage?.dub ?: (ep.dub == true)
+        val hasDubhard = bootPackage?.dubhard ?: (ep.dubhard == true)
+
+        // Beta-only titles play exclusively through the beta server (their
+        // bootstraps 404 on every provider), so the main hosters are withheld.
+        val betaOnlyTitle = dto.betaOnly == true
 
         return buildList {
-            if (hasSub && "[Sub]" !in excludedAudioTypes) {
-                add(Hoster(hosterName = "[Sub]", internalData = "anipm::$provider/${dto.id}/$epNum/sub"))
+            if (!betaOnlyTitle && hasSub && "[Sub]" !in excludedAudioTypes) {
+                add(Hoster(hosterName = "[Sub]", internalData = "anipm::main/$bootProvider/$bootHandle/$epNum/sub"))
             }
-            if (hasSubhard && "[Hard Sub]" !in excludedAudioTypes) {
-                add(Hoster(hosterName = "[Hard Sub]", internalData = "anipm::$provider/${dto.id}/$epNum/subhard"))
+            if (!betaOnlyTitle && hasSubhard && "[Hard Sub]" !in excludedAudioTypes) {
+                add(Hoster(hosterName = "[Hard Sub]", internalData = "anipm::main/$bootProvider/$bootHandle/$epNum/subhard"))
             }
-            if (hasDub && "[Dub]" !in excludedAudioTypes) {
-                add(Hoster(hosterName = "[Dub]", internalData = "anipm::$provider/${dto.id}/$epNum/dub"))
+            if (dubLang == null || dubLang == "eng") {
+                // English dubs ride the default settlar flow; Beta is a bonus server
+                if (!betaOnlyTitle && hasDub && "[Dub]" !in excludedAudioTypes) {
+                    add(Hoster(hosterName = "[Dub]", internalData = "anipm::main/$bootProvider/$bootHandle/$epNum/dub"))
+                }
+                if (!betaOnlyTitle && hasDubhard && "[Hard Dub]" !in excludedAudioTypes) {
+                    add(Hoster(hosterName = "[Hard Dub]", internalData = "anipm::main/$bootProvider/$bootHandle/$epNum/dubhard"))
+                }
+                val beta = fetchBetaServer(dto.anilistId?.toLongOrNull())
+                if (beta != null && beta.coversEpisode(dto.anilistId?.toLongOrNull() ?: 0L, ep.number, null)) {
+                    add(Hoster(hosterName = "[Beta]", internalData = "anipm::beta/$bootProvider/$bootHandle/$epNum/dub"))
+                }
+            } else {
+                // Non-English dubs live on the Beta server (audio=<lang>)
+                val beta = fetchBetaServer(dto.anilistId?.toLongOrNull())
+                if (beta != null && beta.coversEpisode(dto.anilistId?.toLongOrNull() ?: 0L, ep.number, dubLang)) {
+                    add(Hoster(hosterName = "[Dub]", internalData = "anipm::beta/$bootProvider/$bootHandle/$epNum/dub"))
+                    if ("[Hard Dub]" !in excludedAudioTypes) {
+                        add(Hoster(hosterName = "[Hard Dub]", internalData = "anipm::beta/$bootProvider/$bootHandle/$epNum/dubhard"))
+                    }
+                }
             }
-            if (hasDubhard && "[Hard Dub]" !in excludedAudioTypes) {
-                add(Hoster(hosterName = "[Hard Dub]", internalData = "anipm::$provider/${dto.id}/$epNum/dubhard"))
+            if ("[Backup]" !in excludedAudioTypes && backupEmbed?.available == true) {
+                add(Hoster(hosterName = "[Backup]", internalData = "anipm::backup/$bootProvider/$bootHandle/$epNum/$bootLang"))
             }
         }
     }
@@ -379,11 +472,13 @@ abstract class AniPM :
             "subhard" -> "[Hard Sub]" to "[Sub]"
             "dub" -> "[Dub]" to "[Hard Dub]"
             "dubhard" -> "[Hard Dub]" to "[Dub]"
+            "beta" -> "[Beta]" to null
+            "backup" -> "[Backup]" to null
             else -> "[Sub]" to "[Hard Sub]"
         }
         return sortedWith(
             compareByDescending<Hoster> { it.hosterName == primary }
-                .thenByDescending { it.hosterName == secondary },
+                .thenByDescending { secondary != null && it.hosterName == secondary },
         )
     }
 
@@ -397,90 +492,192 @@ abstract class AniPM :
 
     override suspend fun getVideoList(hoster: Hoster): List<Video> {
         val parts = hoster.internalData.removePrefix("anipm::").split("/")
-        val provider = parts[0]
-        val id = parts[1]
-        val epNum = parts[2]
-        val lang = parts[3]
+        val kind = parts[0]
+        val provider = parts[1]
+        val handle = parts[2]
+        val epNum = parts[3]
+        val channel = parts[4]
 
         return try {
-            // 1) Bootstrap
-            val boot = fetchBootstrap(provider, id, epNum, lang)
-            val selection = boot.settlarSelection?.takeIf(String::isNotBlank)
-                ?: return emptyList()
-
-            // 2) Exchange selection for a settlar embed token
-            val settlar = client.get(
-                "$apiUrl/anime/settlar/session".toHttpUrl().newBuilder()
-                    .addQueryParameter("selection", selection)
-                    .addQueryParameter("provider", "anipm")
-                    .addQueryParameter("ep", epNum)
-                    .addQueryParameter("channel", lang)
-                    .addQueryParameter("telemetry", "0")
-                    .build(),
-                apiHeaders(),
-            ).use { it.parseAs<SettlarSessionDto>() }
-            val token = settlar.embedUrl?.toHttpUrl()?.queryParameter("t")
-                ?: return emptyList()
-
-            // 3) Embed session → signed HLS manifest URL & subtitles
-            val embed = client.get("$embedApi/api/embed/session?t=$token", embedHeaders)
-                .use { it.parseAs<EmbedSessionDto>() }
-            val manifest = embed.source?.takeIf(String::isNotBlank)
-                ?: return emptyList()
-
-            val stamps = buildList {
-                boot.skip?.op?.takeIf { it.end > it.start }?.let {
-                    add(TimeStamp(it.start, it.end, name = "Intro", type = ChapterType.Opening))
-                }
-                boot.skip?.ed?.takeIf { it.end > it.start }?.let {
-                    add(TimeStamp(it.start, it.end, name = "Outro", type = ChapterType.Ending))
-                }
-            }
-
-            val embedSubs = embed.subtitles.mapNotNull { sub ->
-                val subUrl = sub.url?.takeIf(String::isNotBlank) ?: return@mapNotNull null
-                val subLabel = sub.label ?: sub.srclang ?: "Subtitle"
-                Track(subUrl, subLabel)
-            }
-
-            /*** We route through [SettlarProxy]. */
-            val proxy = getProxy()
-            val vids = playlistUtils.extractFromHls(
-                playlistUrl = proxy.proxyUrl(manifest),
-                referer = embedApi,
-                masterHeaders = headers,
-                videoHeaders = headers,
-            ).map { video ->
-                val subtitles = video.subtitleTracks.map { track ->
-                    track.copy(url = proxy.subtitleUrl(track.url))
-                }
-                if (subtitles.isNotEmpty()) {
-                    video.copy(subtitleTracks = subtitles)
-                } else {
-                    video
-                }
+            val videos = when (kind) {
+                "beta" -> extractBeta(handle, epNum, channel)
+                "backup" -> extractBackup(provider, handle, epNum, channel)
+                else -> extractMain(provider, handle, epNum, channel)
             }
 
             val qualityRank = PREF_QUALITY_VALUES.reversed()
-            val sorted = vids.sortedWith(
+            val sorted = videos.sortedWith(
                 compareByDescending<Video> { it.videoTitle.contains(preferredQuality) }
                     .thenByDescending { video ->
                         qualityRank.indexOfFirst { video.videoTitle.contains(it) }
                     },
             )
 
-            val isPreferredAudio = lang == preferredAudio
-            val marked = sorted.mapIndexed { index, video ->
-                when {
-                    index == 0 && isPreferredAudio -> video.copy(preferred = true)
-                    else -> video.copy(preferred = false)
-                }
+            val preferredHoster = when (preferredAudio) {
+                "subhard" -> "[Hard Sub]"
+                "dub" -> "[Dub]"
+                "dubhard" -> "[Hard Dub]"
+                "beta" -> "[Beta]"
+                "backup" -> "[Backup]"
+                else -> "[Sub]"
             }
+            val isPreferredHoster = hoster.hosterName == preferredHoster
 
-            return if (stamps.isEmpty()) marked else marked.map { it.copy(timestamps = stamps) }
-        } catch (_: Exception) {
+            sorted.mapIndexed { index, video ->
+                video.copy(preferred = index == 0 && isPreferredHoster)
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
             emptyList()
         }
+    }
+
+    private suspend fun extractMain(provider: String, handle: String, epNum: String, channel: String): List<Video> {
+        val bootLang = if (channel.startsWith("dub")) "dub" else "sub"
+        val boot = fetchBootstrap(provider, handle, epNum, bootLang)
+        val selection = boot.settlarSelection?.takeIf(String::isNotBlank)
+            ?: return emptyList()
+
+        val embed = settleSession(selection, epNum, channel)
+            ?: return emptyList()
+
+        val manifest = embed.source?.takeIf(String::isNotBlank)
+            ?: return emptyList()
+
+        val embedSubs = embed.subtitles.mapNotNull { sub ->
+            val subUrl = sub.assUrl?.takeIf(String::isNotBlank) ?: sub.url?.takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            val subLabel = sub.label ?: sub.srclang ?: "Subtitle"
+            Track(subUrl, subLabel)
+        }
+
+        return playThroughProxy(getProxy(), manifest, embedSubs, buildSkipList(boot.skip))
+    }
+
+    private suspend fun extractBeta(id: String, epNum: String, channel: String): List<Video> {
+        val dto = resolveSeries(id)
+        val aid = dto.anilistId?.toLongOrNull()
+            ?: return emptyList()
+
+        val copyUrl = "$apiUrl/anime/beta-server/$aid/copy".toHttpUrl().newBuilder()
+            .addQueryParameter("ep", epNum)
+            .addQueryParameter("lang", if (channel.startsWith("dub")) "dub" else "sub")
+            .apply {
+                if (dubLang != null && channel.startsWith("dub")) addQueryParameter("audio", dubLang)
+            }
+            .build()
+
+        val copy = client.get(copyUrl, apiHeaders()).use { it.parseAs<BetaCopyDto>() }
+        val player = copy.player?.takeIf(String::isNotBlank)
+            ?: return emptyList()
+        val token = player.toHttpUrl().queryParameter("t")
+            ?: return emptyList()
+
+        val embed = client.get("$embedApi/api/embed/session?t=$token", embedHeaders)
+            .use { it.parseAs<EmbedSessionDto>() }
+        val manifest = embed.source?.takeIf(String::isNotBlank)
+            ?: return emptyList()
+
+        val boot = try {
+            fetchBootstrap("settlar", id, epNum, if (channel.startsWith("dub")) "dub" else "sub")
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+
+        val embedSubs = embed.subtitles.mapNotNull { sub ->
+            val subUrl = sub.assUrl?.takeIf(String::isNotBlank) ?: sub.url?.takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            val subLabel = sub.label ?: sub.srclang ?: "Subtitle"
+            Track(subUrl, subLabel)
+        }
+
+        return playThroughProxy(getProxy(), manifest, embedSubs, buildSkipList(boot?.skip))
+    }
+
+    private suspend fun extractBackup(provider: String, handle: String, epNum: String, channel: String): List<Video> {
+        val bootLang = if (channel.startsWith("dub")) "dub" else "sub"
+        val boot = fetchBootstrap(provider, handle, epNum, bootLang)
+        val backup = boot.backupEmbed?.takeIf { it.available }
+            ?: return emptyList()
+
+        val token = backup.direct?.stream?.takeIf(String::isNotBlank)
+            ?.toHttpUrl()
+            ?.queryParameter("t")
+            ?: run {
+                Log.e(TAG, "Backup embed has no stream token (url: " + (backup.url?.take(80) ?: "null") + ")")
+                return emptyList()
+            }
+
+        val embed = client.get("$embedApi/api/embed/session?t=$token", embedHeaders)
+            .use { it.parseAs<EmbedSessionDto>() }
+        val manifest = embed.source?.takeIf(String::isNotBlank)
+            ?: return emptyList()
+
+        val embedSubs = embed.subtitles.mapNotNull { sub ->
+            val subUrl = sub.assUrl?.takeIf(String::isNotBlank) ?: sub.url?.takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            val subLabel = sub.label ?: sub.srclang ?: "Subtitle"
+            Track(subUrl, subLabel)
+        }
+
+        return playThroughProxy(getProxy(), manifest, embedSubs, buildSkipList(boot.skip))
+            .map { it.forceMpegts() }
+    }
+
+    private fun Video.forceMpegts(): Video = copy(
+        mpvArgs = mpvArgs.filterNot { it.first == "demuxer-lavf-o" } +
+            ("demuxer-lavf-o" to "force_mpegts=1"),
+        ffmpegStreamArgs = ffmpegStreamArgs.filterNot { it.first == "force_mpegts" } +
+            ("force_mpegts" to "1"),
+    )
+
+    private suspend fun settleSession(selection: String, epNum: String, channel: String): EmbedSessionDto? {
+        val settlar = client.get(
+            "$apiUrl/anime/settlar/session".toHttpUrl().newBuilder()
+                .addQueryParameter("selection", selection)
+                .addQueryParameter("provider", "anipm")
+                .addQueryParameter("ep", epNum)
+                .addQueryParameter("channel", channel)
+                .addQueryParameter("telemetry", "0")
+                .build(),
+            apiHeaders(),
+        ).use { it.parseAs<SettlarSessionDto>() }
+        val token = settlar.embedUrl?.toHttpUrl()?.queryParameter("t")
+            ?: return null
+
+        return client.get("$embedApi/api/embed/session?t=$token", embedHeaders)
+            .use { it.parseAs<EmbedSessionDto>() }
+    }
+
+    private fun buildSkipList(skip: SkipDto?) = buildList {
+        skip?.op?.takeIf { it.end > it.start }?.let {
+            add(TimeStamp(it.start, it.end, name = "Intro", type = ChapterType.Opening))
+        }
+        skip?.ed?.takeIf { it.end > it.start }?.let {
+            add(TimeStamp(it.start, it.end, name = "Outro", type = ChapterType.Ending))
+        }
+    }
+
+    private fun playThroughProxy(proxy: SettlarProxy, manifest: String, subs: List<Track>, stamps: List<TimeStamp>): List<Video> {
+        val vids = playlistUtils.extractFromHls(
+            playlistUrl = proxy.proxyUrl(manifest),
+            referer = embedApi,
+            masterHeaders = headers,
+            videoHeaders = headers,
+            subtitleList = subs,
+        ).map { video ->
+            val subtitles = video.subtitleTracks.map { track ->
+                track.copy(url = proxy.subtitleUrl(track.url))
+            }
+            if (subtitles.isNotEmpty()) {
+                video.copy(subtitleTracks = subtitles)
+            } else {
+                video
+            }
+        }
+
+        return if (stamps.isEmpty()) vids else vids.map { it.copy(timestamps = stamps) }
     }
 
     // ============================ Series fetch ============================
@@ -717,13 +914,31 @@ abstract class AniPM :
         preferences.edit().putString(handleCacheKey(oldHandle), newHandle).apply()
     }
 
-    private suspend fun fetchBootstrap(provider: String, id: String, epNum: String, lang: String): BootstrapDto {
+    /**
+     * The anilist provider 404s for beta-only titles, in which case the
+     * settlar provider with the route slug still resolves.
+     */
+    private suspend fun fetchBootstrap(provider: String, id: String, epNum: String, lang: String): BootstrapDto = try {
+        bootstrapRequest(provider, id, epNum, lang)
+    } catch (e: Exception) {
+        if (e is CancellationException || provider == "settlar") throw e
+        val slug = resolveSeries(id).routeId?.takeIf(String::isNotBlank) ?: id
+        bootstrapRequest("settlar", slug, epNum, lang)
+    }
+
+    private suspend fun bootstrapRequest(provider: String, id: String, epNum: String, lang: String): BootstrapDto {
         val bootLang = if (lang.startsWith("dub")) "dub" else "sub"
-        val res = client.get(
-            "$apiUrl/anime/playback-bootstrap/$provider/$id?ep=$epNum&lang=$bootLang",
-            apiHeaders(),
-        )
-        return res.use { it.parseAs<BootstrapDto>() }
+        val headers = apiHeaders().newBuilder()
+            .apply {
+                set("Sec-Fetch-Dest", "empty")
+                set("Sec-Fetch-Mode", "cors")
+                set("Sec-Fetch-Site", "same-origin")
+            }
+            .build()
+        return client.get(
+            "$apiUrl/anime/playback-bootstrap/$provider/$id?ep=$epNum&lang=$bootLang&backup=1",
+            headers,
+        ).use { it.parseAs<BootstrapDto>() }
     }
 
     private suspend fun fetchFillerSet(anilistId: Long?, title: String?): Set<Double> = try {
@@ -755,14 +970,13 @@ abstract class AniPM :
 
     // ============================ Preferences =============================
     override fun setupPreferenceScreen(screen: PreferenceScreen): Unit = with(screen) {
-        addPreference(
-            SwitchPreferenceCompat(context).apply {
-                key = PREF_HIDE_ADULT_KEY
-                title = "Hide 18+ Titles"
-                summary = "Filters adult titles out of browse/search results."
-                setDefaultValue(PREF_HIDE_ADULT_DEFAULT)
-            },
+        addSwitchPreference(
+            key = PREF_HIDE_ADULT_KEY,
+            title = "Hide 18+ Titles",
+            summary = "Filters adult titles out of browse/search results.",
+            default = PREF_HIDE_ADULT_DEFAULT,
         )
+
         addListPreference(
             key = PREF_QUALITY_KEY,
             title = "Preferred Quality",
@@ -779,15 +993,13 @@ abstract class AniPM :
             default = PREF_AUDIO_DEFAULT,
             summary = "%s",
         )
-        addPreference(
-            MultiSelectListPreference(context).apply {
-                key = PREF_AUDIO_EXCLUDE_KEY
-                title = "Exclude Audio Types"
-                entries = arrayOf("Sub", "Hard Sub", "Dub", "Hard Dub")
-                entryValues = arrayOf("[Sub]", "[Hard Sub]", "[Dub]", "[Hard Dub]")
-                setDefaultValue(PREF_AUDIO_EXCLUDE_DEFAULT)
-                summary = "Hide videos of the selected audio types."
-            },
+        addSetPreference(
+            key = PREF_AUDIO_EXCLUDE_KEY,
+            title = "Exclude Servers",
+            entries = arrayOf("Sub", "Hard Sub", "Dub", "Hard Dub", "Beta", "Backup").toList(),
+            entryValues = arrayOf("[Sub]", "[Hard Sub]", "[Dub]", "[Hard Dub]", "[Beta]", "[Backup]").toList(),
+            default = PREF_AUDIO_EXCLUDE_DEFAULT,
+            summary = "Hide videos of the selected servers.",
         )
     }
 
@@ -806,6 +1018,7 @@ abstract class AniPM :
     }
 
     companion object {
+        private const val TAG = "AniPM"
         private const val PAGE_SIZE = 30
 
         private const val PREF_HIDE_ADULT_KEY = "hide_adult"
@@ -817,8 +1030,8 @@ abstract class AniPM :
         private const val PREF_QUALITY_DEFAULT = "1080"
 
         private const val PREF_AUDIO_KEY = "preferred_audio"
-        private val PREF_AUDIO_ENTRIES = listOf("Sub", "Hard Sub", "Dub", "Hard Dub")
-        private val PREF_AUDIO_VALUES = listOf("sub", "subhard", "dub", "dubhard")
+        private val PREF_AUDIO_ENTRIES = listOf("Sub", "Hard Sub", "Dub", "Hard Dub", "Beta", "Backup")
+        private val PREF_AUDIO_VALUES = listOf("sub", "subhard", "dub", "dubhard", "beta", "backup")
         private const val PREF_AUDIO_DEFAULT = "sub"
 
         private const val PREF_AUDIO_EXCLUDE_KEY = "excluded_audio_types"

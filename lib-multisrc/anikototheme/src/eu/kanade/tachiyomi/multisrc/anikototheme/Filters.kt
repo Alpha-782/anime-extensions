@@ -5,7 +5,7 @@ import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import okhttp3.HttpUrl
 import java.util.Calendar
 
-object AnikotoThemeFilters {
+object Filters {
 
     // ============================== Base Classes ==============================
 

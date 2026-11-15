@@ -2,9 +2,9 @@ package eu.kanade.tachiyomi.animeextension.en.animesogo
 
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.multisrc.anikototheme.AnikotoTheme
-import eu.kanade.tachiyomi.multisrc.anikototheme.AnikotoThemeFilters
-import eu.kanade.tachiyomi.multisrc.anikototheme.AnikotoThemeFilters.addListQueryParameter
-import eu.kanade.tachiyomi.multisrc.anikototheme.AnikotoThemeFilters.addQueryParameterIfNotEmpty
+import eu.kanade.tachiyomi.multisrc.anikototheme.Filters
+import eu.kanade.tachiyomi.multisrc.anikototheme.Filters.addListQueryParameter
+import eu.kanade.tachiyomi.multisrc.anikototheme.Filters.addQueryParameterIfNotEmpty
 import eu.kanade.tachiyomi.network.GET
 import keiyoushi.annotation.Source
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -90,7 +90,7 @@ abstract class AnimeSogo :
     // =================== Search Override =================================
 
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
-        val params = AnikotoThemeFilters.getSearchParameters(filters)
+        val params = Filters.getSearchParameters(filters)
         val vrf = if (query.isNotBlank()) vrfEncrypt(query) else ""
 
         val url = baseUrl.toHttpUrl().newBuilder().apply {

@@ -3,10 +3,11 @@ plugins {
 }
 
 dependencies {
-    implementation(project(":lib:playlistutils"))
+    api(project(":lib:megaplayextractor"))
+    api(project(":lib:playlistutils"))
 }
 
 yuzono {
-    baseVersionCode = 10
+    baseVersionCode = 11
     libVersion = "16"
 }

@@ -2,7 +2,7 @@ package eu.kanade.tachiyomi.animeextension.en.anichi
 
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.multisrc.anikototheme.AnikotoTheme
-import eu.kanade.tachiyomi.multisrc.anikototheme.dto.ResultResponse
+import eu.kanade.tachiyomi.multisrc.anikototheme.ResultResponse
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
